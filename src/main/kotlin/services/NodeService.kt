@@ -1,8 +1,6 @@
 package com.dallaslabs.services
 
-import com.dallaslabs.models.ModelInfo
-import com.dallaslabs.models.Node
-import com.dallaslabs.models.NodeStatus
+import com.dallaslabs.models.*
 import io.vertx.core.Future
 import io.vertx.core.Vertx
 import io.vertx.core.json.JsonObject
@@ -163,5 +161,133 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>) {
         }
 
         return Future.succeededFuture(statuses)
+    }
+
+    /**
+     * Gets metrics for a specific node
+     *
+     * @param nodeName Name of the node
+     * @return Future with node metrics
+     */
+    suspend fun getNodeMetrics(nodeName: String): Future<NodeMetrics> {
+        val node = nodes.find { it.name == nodeName }
+            ?: return Future.failedFuture("Node $nodeName not found")
+
+        logger.info { "Getting metrics for node: ${node.name}" }
+
+        return try {
+            val response = webClient.get(node.port, node.host, "/admin/metrics")
+                .timeout(5000)
+                .send()
+                .coAwait()
+
+            if (response.statusCode() == 200) {
+                val metrics = response.bodyAsJson(NodeMetrics::class.java)
+                Future.succeededFuture(metrics)
+            } else {
+                Future.failedFuture("Failed to get metrics with status code: ${response.statusCode()}")
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get metrics for node: ${node.name}" }
+            Future.failedFuture(e)
+        }
+    }
+
+    /**
+     * Gets system information for a specific node
+     *
+     * @param nodeName Name of the node
+     * @return Future with system information
+     */
+    suspend fun getNodeSystemInfo(nodeName: String): Future<SystemInfo> {
+        val node = nodes.find { it.name == nodeName }
+            ?: return Future.failedFuture("Node $nodeName not found")
+
+        logger.info { "Getting system info for node: ${node.name}" }
+
+        return try {
+            val response = webClient.get(node.port, node.host, "/admin/system")
+                .timeout(5000)
+                .send()
+                .coAwait()
+
+            if (response.statusCode() == 200) {
+                val sysInfo = response.bodyAsJson(SystemInfo::class.java)
+                Future.succeededFuture(sysInfo)
+            } else {
+                Future.failedFuture("Failed to get system info with status code: ${response.statusCode()}")
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get system info for node: ${node.name}" }
+            Future.failedFuture(e)
+        }
+    }
+
+    /**
+     * Resets statistics for a specific node
+     *
+     * @param nodeName Name of the node
+     * @return Future indicating success or failure
+     */
+    suspend fun resetNodeStats(nodeName: String): Future<Void> {
+        val node = nodes.find { it.name == nodeName }
+            ?: return Future.failedFuture("Node $nodeName not found")
+
+        logger.info { "Resetting stats for node: ${node.name}" }
+
+        return try {
+            val response = webClient.post(node.port, node.host, "/admin/reset-stats")
+                .timeout(5000)
+                .send()
+                .coAwait()
+
+            if (response.statusCode() == 200) {
+                Future.succeededFuture()
+            } else {
+                Future.failedFuture("Failed to reset stats with status code: ${response.statusCode()}")
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to reset stats for node: ${node.name}" }
+            Future.failedFuture(e)
+        }
+    }
+
+    /**
+     * Gets logs for a specific node
+     *
+     * @param nodeName Name of the node
+     * @param level Log level filter
+     * @return Future with logs
+     */
+    suspend fun getNodeLogs(nodeName: String, level: String? = null): Future<List<Map<String, Any>>> {
+        val node = nodes.find { it.name == nodeName }
+            ?: return Future.failedFuture("Node $nodeName not found")
+
+        logger.info { "Getting logs for node: ${node.name}, level: $level" }
+
+        return try {
+            val request = webClient.get(node.port, node.host, "/admin/logs")
+
+            // Add level parameter if provided
+            if (level != null) {
+                request.addQueryParam("level", level)
+            }
+
+            val response = request
+                .timeout(5000)
+                .send()
+                .coAwait()
+
+            if (response.statusCode() == 200) {
+                val logs = response.bodyAsJsonArray().map { it as JsonObject }
+                    .map { json -> json.map }
+                Future.succeededFuture(logs)
+            } else {
+                Future.failedFuture("Failed to get logs with status code: ${response.statusCode()}")
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get logs for node: ${node.name}" }
+            Future.failedFuture(e)
+        }
     }
 }

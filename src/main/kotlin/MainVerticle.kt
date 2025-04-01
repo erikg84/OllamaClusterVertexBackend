@@ -45,7 +45,7 @@ class MainVerticle : CoroutineVerticle() {
         // Initialize services and handlers
         val queue = Queue(vertx, concurrency)
         val nodeService = NodeService(vertx, nodes)
-        val clusterService = ClusterService(vertx, nodes, nodeService)
+        val clusterService = ClusterService(nodeService)
         val adminService = AdminService(vertx, nodeService, queue)
 
         val healthHandler = HealthHandler()
@@ -66,24 +66,32 @@ class MainVerticle : CoroutineVerticle() {
         router.get("/openapi.yaml").handler(StaticHandler.create("static"))
         router.route("/static/*").handler(StaticHandler.create("static"))
         router.get("/health").handler { healthHandler.handle(it) }
+
         router.get("/api/nodes").handler { nodeHandler.listNodes(it) }
         router.get("/api/nodes/status").handler { nodeHandler.getAllNodesStatus(it) }
         router.get("/api/nodes/:name").handler { nodeHandler.getNodeStatus(it) }
         router.get("/api/nodes/:name/models").handler { nodeHandler.getNodeModels(it) }
+
         router.get("/api/queue/status").handler { queueHandler.getStatus(it) }
         router.post("/api/queue/pause").handler { queueHandler.pauseQueue(it) }
         router.post("/api/queue/resume").handler { queueHandler.resumeQueue(it) }
+        
         router.post("/api/generate").handler { generateHandler.handle(it) }
         router.post("/api/chat").handler { chatHandler.handle(it) }
-        router.get("/api/cluster/status").handler { clusterHandler.getStatus(it) }
-        router.get("/api/cluster/models").handler { clusterHandler.getAllModels(it) }
-        router.get("/api/cluster/models/:modelId").handler { clusterHandler.checkModelAvailability(it) }
+
         router.get("/admin/metrics").handler { adminHandler.getMetrics(it) }
         router.get("/admin/metrics/prometheus").handler { adminHandler.getPrometheusMetrics(it) }
         router.get("/admin/requests").handler { adminHandler.getRequestStatistics(it) }
         router.get("/admin/health").handler { adminHandler.getNodeHealth(it) }
         router.get("/admin/system").handler { adminHandler.getSystemInfo(it) }
         router.post("/admin/reset-stats").handler { adminHandler.resetStatistics(it) }
+
+        router.get("/api/cluster/models").handler { clusterHandler.getAllModels(it) }
+        router.get("/api/cluster/models/:modelId").handler { clusterHandler.checkModelAvailability(it) }
+        router.get("/api/cluster/status").handler { clusterHandler.getClusterStatus(it) }
+        router.get("/api/cluster/metrics").handler { clusterHandler.getClusterMetrics(it) }
+        router.post("/api/cluster/reset-stats").handler { clusterHandler.resetClusterStats(it) }
+        router.get("/api/cluster/logs").handler { clusterHandler.getClusterLogs(it) }
 
         router.get("/test").handler { ctx ->
             ctx.response().end("Router is working!")
