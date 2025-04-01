@@ -1,0 +1,841 @@
+openapi: 3.0.3
+info:
+  title: LLM Cluster API
+  description: API for managing a cluster of LLM nodes
+  version: 1.0.0
+servers:
+  - url: http://localhost:3001
+    description: Local development server
+paths:
+  /health:
+    get:
+      summary: Check API health
+      description: Returns the health status of the API
+      operationId: checkHealth
+      responses:
+        '200':
+          description: Successfully returned health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+              example:
+                status: "ok"
+                message: "Service is healthy"
+
+  /api/nodes:
+    get:
+      summary: List all nodes
+      description: Returns a list of all nodes in the cluster
+      operationId: listNodes
+      responses:
+        '200':
+          description: Successfully returned list of nodes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodesResponse'
+
+  /api/nodes/status:
+    get:
+      summary: Get status of all nodes
+      description: Returns the status of all nodes in the cluster
+      operationId: getNodesStatus
+      responses:
+        '200':
+          description: Successfully returned nodes status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodesStatusResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/nodes/{name}:
+    get:
+      summary: Get status of a specific node
+      description: Returns the status of a specific node by name
+      operationId: getNodeStatus
+      parameters:
+        - name: name
+          in: path
+          description: Name of the node
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully returned node status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeStatusResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/nodes/{name}/models:
+    get:
+      summary: Get models available on a specific node
+      description: Returns the list of models available on a specific node
+      operationId: getNodeModels
+      parameters:
+        - name: name
+          in: path
+          description: Name of the node
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully returned node models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/cluster/status:
+    get:
+      summary: Get cluster status
+      description: Returns the status of the entire cluster
+      operationId: getClusterStatus
+      responses:
+        '200':
+          description: Successfully returned cluster status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterStatusResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/cluster/models:
+    get:
+      summary: Get all models in the cluster
+      description: Returns all models available across the cluster
+      operationId: getAllModels
+      responses:
+        '200':
+          description: Successfully returned all models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/cluster/models/{modelId}:
+    get:
+      summary: Check model availability
+      description: Checks the availability of a specific model in the cluster
+      operationId: checkModelAvailability
+      parameters:
+        - name: modelId
+          in: path
+          description: ID of the model
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully returned model availability
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelAvailabilityResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/queue/status:
+    get:
+      summary: Get queue status
+      description: Returns the current status of the request queue
+      operationId: getQueueStatus
+      responses:
+        '200':
+          description: Successfully returned queue status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueStatusResponse'
+
+  /api/queue/pause:
+    post:
+      summary: Pause queue
+      description: Pauses the request queue
+      operationId: pauseQueue
+      responses:
+        '200':
+          description: Successfully paused the queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/queue/resume:
+    post:
+      summary: Resume queue
+      description: Resumes the request queue
+      operationId: resumeQueue
+      responses:
+        '200':
+          description: Successfully resumed the queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/generate:
+    post:
+      summary: Generate text
+      description: Generates text using a specified model
+      operationId: generateText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+      responses:
+        '200':
+          description: Successfully generated text
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/chat:
+    post:
+      summary: Chat completion
+      description: Creates a chat completion using a specified model
+      operationId: chatCompletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Successfully created chat completion
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/metrics:
+    get:
+      summary: Get metrics
+      description: Returns general metrics about the API
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Successfully returned metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/metrics/prometheus:
+    get:
+      summary: Get Prometheus metrics
+      description: Returns metrics in Prometheus format
+      operationId: getPrometheusMetrics
+      responses:
+        '200':
+          description: Successfully returned Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /admin/requests:
+    get:
+      summary: Get request statistics
+      description: Returns statistics about requests
+      operationId: getRequestStatistics
+      responses:
+        '200':
+          description: Successfully returned request statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestStatisticsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/health:
+    get:
+      summary: Get node health
+      description: Returns health information about all nodes
+      operationId: getNodeHealth
+      responses:
+        '200':
+          description: Successfully returned node health
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeHealthResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/system:
+    get:
+      summary: Get system information
+      description: Returns information about the system
+      operationId: getSystemInfo
+      responses:
+        '200':
+          description: Successfully returned system information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemInfoResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/reset-stats:
+    post:
+      summary: Reset statistics
+      description: Resets all request statistics
+      operationId: resetStatistics
+      responses:
+        '200':
+          description: Successfully reset statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Response status
+        message:
+          type: string
+          description: Optional message
+        data:
+          type: object
+          description: Optional data payload
+      required:
+        - status
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [error]
+        message:
+          type: string
+
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        message:
+          type: string
+
+    Node:
+      type: object
+      properties:
+        name:
+          type: string
+        host:
+          type: string
+        port:
+          type: integer
+        type:
+          type: string
+        platform:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+      required:
+        - name
+        - host
+        - port
+        - type
+        - platform
+        - capabilities
+
+    NodeStatus:
+      type: object
+      properties:
+        node:
+          $ref: '#/components/schemas/Node'
+        status:
+          type: string
+        message:
+          type: string
+      required:
+        - node
+        - status
+
+    ModelInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        size:
+          type: integer
+          format: int64
+        quantization:
+          type: string
+      required:
+        - id
+        - name
+
+    ModelAvailability:
+      type: object
+      properties:
+        modelId:
+          type: string
+        available:
+          type: boolean
+        nodes:
+          type: array
+          items:
+            type: string
+      required:
+        - modelId
+        - available
+        - nodes
+
+    ClusterStatus:
+      type: object
+      properties:
+        totalNodes:
+          type: integer
+        onlineNodes:
+          type: integer
+        offlineNodes:
+          type: integer
+        availableGPUs:
+          type: integer
+        availableCPUs:
+          type: integer
+        status:
+          type: string
+      required:
+        - totalNodes
+        - onlineNodes
+        - offlineNodes
+        - availableGPUs
+        - availableCPUs
+        - status
+
+    QueueStatus:
+      type: object
+      properties:
+        size:
+          type: integer
+        pending:
+          type: integer
+        isPaused:
+          type: boolean
+      required:
+        - size
+        - pending
+        - isPaused
+
+    Metrics:
+      type: object
+      properties:
+        uptime:
+          type: integer
+          format: int64
+        totalRequests:
+          type: integer
+          format: int64
+        successfulRequests:
+          type: integer
+          format: int64
+        failedRequests:
+          type: integer
+          format: int64
+        queueSize:
+          type: integer
+        activeNodes:
+          type: integer
+        totalNodes:
+          type: integer
+      required:
+        - uptime
+        - totalRequests
+        - successfulRequests
+        - failedRequests
+        - queueSize
+        - activeNodes
+        - totalNodes
+
+    RequestStatistics:
+      type: object
+      properties:
+        totalRequests:
+          type: integer
+          format: int64
+        successfulRequests:
+          type: integer
+          format: int64
+        failedRequests:
+          type: integer
+          format: int64
+        averageLatency:
+          type: integer
+          format: int64
+      required:
+        - totalRequests
+        - successfulRequests
+        - failedRequests
+        - averageLatency
+
+    NodeHealthInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+        message:
+          type: string
+      required:
+        - name
+        - status
+
+    NodeHealth:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeHealthInfo'
+      required:
+        - nodes
+
+    SystemInfo:
+      type: object
+      properties:
+        javaVersion:
+          type: string
+        osName:
+          type: string
+        osVersion:
+          type: string
+        availableProcessors:
+          type: integer
+        freeMemory:
+          type: integer
+          format: int64
+        maxMemory:
+          type: integer
+          format: int64
+        totalMemory:
+          type: integer
+          format: int64
+        heapMemoryUsed:
+          type: integer
+          format: int64
+        heapMemoryMax:
+          type: integer
+          format: int64
+        nonHeapMemoryUsed:
+          type: integer
+          format: int64
+        uptime:
+          type: integer
+          format: int64
+      required:
+        - javaVersion
+        - osName
+        - osVersion
+        - availableProcessors
+        - freeMemory
+        - maxMemory
+        - totalMemory
+        - heapMemoryUsed
+        - heapMemoryMax
+        - nonHeapMemoryUsed
+        - uptime
+
+    Message:
+      type: object
+      properties:
+        role:
+          type: string
+        content:
+          type: string
+      required:
+        - role
+        - content
+
+    GenerateRequest:
+      type: object
+      properties:
+        node:
+          type: string
+          description: Optional node to use for generation
+        model:
+          type: string
+        prompt:
+          type: string
+        stream:
+          type: boolean
+          default: false
+      required:
+        - model
+        - prompt
+
+    ChatRequest:
+      type: object
+      properties:
+        node:
+          type: string
+          description: Optional node to use for chat
+        model:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        stream:
+          type: boolean
+          default: false
+      required:
+        - model
+        - messages
+
+    NodesResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Node'
+      required:
+        - status
+        - data
+
+    NodesStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeStatus'
+      required:
+        - status
+        - data
+
+    NodeStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          $ref: '#/components/schemas/NodeStatus'
+      required:
+        - status
+        - data
+
+    ModelsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelInfo'
+      required:
+        - status
+        - data
+
+    ClusterStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          $ref: '#/components/schemas/ClusterStatus'
+      required:
+        - status
+        - data
+
+    ModelAvailabilityResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          $ref: '#/components/schemas/ModelAvailability'
+      required:
+        - status
+        - data
+
+    QueueStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          $ref: '#/components/schemas/QueueStatus'
+      required:
+        - status
+        - data
+
+    MetricsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          $ref: '#/components/schemas/Metrics'
+      required:
+        - status
+        - data
+
+    RequestStatisticsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          $ref: '#/components/schemas/RequestStatistics'
+      required:
+        - status
+        - data
+
+    NodeHealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          $ref: '#/components/schemas/NodeHealth'
+      required:
+        - status
+        - data
+
+    SystemInfoResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          $ref: '#/components/schemas/SystemInfo'
+      required:
+        - status
+        - data
