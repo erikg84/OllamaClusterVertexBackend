@@ -33,8 +33,11 @@ class ClusterHandler(
 
         launch {
             try {
-                val models = clusterService.getAllModels()
-                val response = ApiResponse.success(models)
+                val models = clusterService.getAllModels().map { it.copy(status = "loaded") }
+                val response = ApiResponse.success(
+                    data = models,
+                    message = "Cluster Models: ${models.size} found"
+                )
 
                 ctx.response()
                     .putHeader("Content-Type", "application/json")

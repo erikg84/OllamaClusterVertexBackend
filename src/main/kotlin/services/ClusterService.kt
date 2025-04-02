@@ -91,10 +91,8 @@ class ClusterService(
             try {
                 val nodeModels = nodeService.getNodeModels(node.name).coAwait()
                 nodeModels.forEach { model ->
-                    if (!modelSet.contains(model.id)) {
-                        modelSet.add(model.id)
-                        models.add(model)
-                    }
+                    modelSet.add(model.id)
+                    models.add(model.copy(node = node.name))
                 }
             } catch (e: Exception) {
                 logger.error(e) { "Failed to get models from node: ${node.name}" }

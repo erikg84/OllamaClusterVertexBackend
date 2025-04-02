@@ -25,7 +25,9 @@ data class ModelInfo(
     val name: String,
     val type: String = "unknown",
     val size: Long = 0,
-    val quantization: String = "unknown"
+    val quantization: String = "unknown",
+    val status: String = "unknown",
+    val node: String = "unknown"
 )
 
 /**
