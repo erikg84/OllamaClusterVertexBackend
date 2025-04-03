@@ -86,7 +86,7 @@ class NodeHandler(
 
                 ctx.response()
                     .putHeader("Content-Type", "application/json")
-                    .setStatusCode(500)
+                    .setStatusCode(200)
                     .end(JsonObject.mapFrom(response).encode())
             } catch (e: Exception) {
                 logger.error(e) { "Failed to get node status for $nodeName" }
