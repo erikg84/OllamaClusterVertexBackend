@@ -40,3 +40,9 @@ nodes:
     type: "cpu"
     platform: "windows"
     capabilities: ["avx512", "parallel"]
+  - name: "BlackPicollo"
+    host: "localhost"
+    port: 3000
+    type: "cpu"
+    platform: "windows"
+    capabilities: [ "avx512", "parallel" ]
