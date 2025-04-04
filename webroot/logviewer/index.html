@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Centralized Log Viewer</title>
+    <base href="/logviewer/" />
+    <!-- Bootstrap 5 -->
+    <link
+            href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+            rel="stylesheet"
+    />
+    <style>
+        /* Dark Theme Base */
+        body {
+            background-color: #1e1e1e;
+            color: #f8f9fa;
+        }
+        .bg-dark-panel {
+            background-color: #2a2a2a;
+        }
+        .sidebar {
+            min-height: 100vh;
+            border-right: 1px solid #444;
+        }
+        .card-dark {
+            background-color: #2a2a2a;
+            border: 1px solid #3a3a3a;
+        }
+        .card-dark .card-header {
+            border-bottom: 1px solid #3a3a3a;
+        }
+        .text-secondary-light {
+            color: #ced4da;
+        }
+        /* Log level colors */
+        .log-error { color: #ff5252; }
+        .log-warn { color: #ffc107; }
+        .log-info { color: #0dcaf0; }
+        .log-debug { color: #adb5bd; }
+        /* Pagination override */
+        .pagination .page-link {
+            background-color: #2a2a2a;
+            color: #f8f9fa;
+            border: 1px solid #444;
+        }
+        .pagination .page-item.active .page-link {
+            background-color: #0dcaf0;
+            border-color: #0dcaf0;
+        }
+        /* Log entry styling */
+        .log-entry {
+            border-bottom: 1px solid #444;
+            padding: 8px 0;
+        }
+        .log-entry:hover {
+            background-color: #343a40;
+            cursor: pointer;
+        }
+        .log-details {
+            display: none;
+            background-color: #3a3a3a;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <!-- Sidebar for Filters -->
+        <nav
+                id="sidebarMenu"
+                class="col-12 col-md-3 col-lg-2 d-md-block sidebar bg-dark-panel p-3"
+        >
+            <h4>Filters</h4>
+            <div class="mb-3">
+                <label for="serverFilter" class="form-label">Server</label>
+                <select id="serverFilter" class="form-select bg-dark-panel text-light">
+                    <option value="">All Servers</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="levelFilter" class="form-label">Log Level</label>
+                <select id="levelFilter" class="form-select bg-dark-panel text-light">
+                    <option value="">All Levels</option>
+                    <option value="info">Info</option>
+                    <option value="warn">Warning</option>
+                    <option value="error">Error</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="messageFilter" class="form-label">Message Contains</label>
+                <input
+                        type="text"
+                        id="messageFilter"
+                        class="form-control bg-dark-panel text-light"
+                        placeholder="Filter by message..."
+                />
+            </div>
+            <div class="mb-3">
+                <label for="requestIdFilter" class="form-label">Request ID</label>
+                <input
+                        type="text"
+                        id="requestIdFilter"
+                        class="form-control bg-dark-panel text-light"
+                        placeholder="Request ID"
+                />
+            </div>
+            <div class="mb-3">
+                <label for="startDate" class="form-label">Start Date</label>
+                <input
+                        type="datetime-local"
+                        id="startDate"
+                        class="form-control bg-dark-panel text-light"
+                />
+            </div>
+            <div class="mb-3">
+                <label for="endDate" class="form-label">End Date</label>
+                <input
+                        type="datetime-local"
+                        id="endDate"
+                        class="form-control bg-dark-panel text-light"
+                />
+            </div>
+            <button id="applyFilters" class="btn btn-primary w-100 mb-2">
+                Apply Filters
+            </button>
+            <button id="refreshLogs" class="btn btn-secondary w-100">
+                Refresh
+            </button>
+        </nav>
+
+        <!-- Main Content with Tabs -->
+        <main class="col-12 col-md-9 col-lg-10 px-md-4">
+            <div class="py-3">
+                <h2>Centralized Log Viewer</h2>
+            </div>
+            <!-- Tab Navigation -->
+            <ul class="nav nav-tabs" id="logViewerTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button
+                            class="nav-link active"
+                            id="list-tab"
+                            data-bs-toggle="tab"
+                            data-bs-target="#list"
+                            type="button"
+                            role="tab"
+                            aria-controls="list"
+                            aria-selected="true"
+                    >
+                        List
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button
+                            class="nav-link"
+                            id="details-tab"
+                            data-bs-toggle="tab"
+                            data-bs-target="#details"
+                            type="button"
+                            role="tab"
+                            aria-controls="details"
+                            aria-selected="false"
+                    >
+                        Details
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button
+                            class="nav-link"
+                            id="stats-tab"
+                            data-bs-toggle="tab"
+                            data-bs-target="#stats"
+                            type="button"
+                            role="tab"
+                            aria-controls="stats"
+                            aria-selected="false"
+                    >
+                        Stats
+                    </button>
+                </li>
+            </ul>
+
+            <!-- Tab Content -->
+            <div class="tab-content mt-3" id="logViewerTabContent">
+                <!-- List Tab: Log Table -->
+                <div
+                        class="tab-pane fade show active"
+                        id="list"
+                        role="tabpanel"
+                        aria-labelledby="list-tab"
+                >
+                    <div class="card card-dark">
+                        <div class="card-header">
+                            <div class="row">
+                                <div class="col-md-2"><strong>Timestamp</strong></div>
+                                <div class="col-md-1"><strong>Level</strong></div>
+                                <div class="col-md-2"><strong>Server</strong></div>
+                                <div class="col-md-7"><strong>Message</strong></div>
+                            </div>
+                        </div>
+                        <div class="card-body" id="logEntries">
+                            <!-- Logs injected here -->
+                        </div>
+                    </div>
+                    <nav aria-label="Page navigation" class="mt-3">
+                        <ul class="pagination" id="pagination"></ul>
+                    </nav>
+                </div>
+
+                <!-- Details Tab: Selected Log Details -->
+                <div
+                        class="tab-pane fade"
+                        id="details"
+                        role="tabpanel"
+                        aria-labelledby="details-tab"
+                >
+                    <div class="card card-dark">
+                        <div class="card-header">
+                            <h5>Log Details</h5>
+                        </div>
+                        <div class="card-body" id="logDetails">
+                            <p class="text-secondary-light">
+                                Select a log from the List tab to view its details.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats Tab: Log Statistics -->
+                <div
+                        class="tab-pane fade"
+                        id="stats"
+                        role="tabpanel"
+                        aria-labelledby="stats-tab"
+                >
+                    <div class="card card-dark">
+                        <div class="card-header">
+                            <h5>Log Statistics</h5>
+                        </div>
+                        <div class="card-body" id="logStats">
+                            <p>Loading statistics...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        let currentPage = 1;
+        let totalPages = 1;
+        const itemsPerPage = 50;
+        const logEntries = document.getElementById('logEntries');
+        const pagination = document.getElementById('pagination');
+        const serverFilter = document.getElementById('serverFilter');
+        const levelFilter = document.getElementById('levelFilter');
+        const messageFilter = document.getElementById('messageFilter');
+        const requestIdFilter = document.getElementById('requestIdFilter');
+        const startDate = document.getElementById('startDate');
+        const endDate = document.getElementById('endDate');
+        const applyFilters = document.getElementById('applyFilters');
+        const refreshLogs = document.getElementById('refreshLogs');
+
+        // Initial load
+        loadServers();
+        loadLogs();
+        loadStats();
+
+        // Event listeners for filters and refresh
+        applyFilters.addEventListener('click', () => {
+            currentPage = 1;
+            loadLogs();
+        });
+        refreshLogs.addEventListener('click', () => {
+            loadLogs();
+            loadStats();
+        });
+
+        // Fetch available servers from API
+        async function loadServers() {
+            try {
+                // First try to get nodes from the cluster API
+                const response = await fetch(`api/nodes/names`);
+                if (response.ok) {
+                    const nodes = await response.json();
+                    serverFilter.innerHTML = '<option value="">All Servers</option>';
+                    nodes.forEach(node => {
+                        const option = document.createElement('option');
+                        option.value = node;
+                        option.textContent = node;
+                        serverFilter.appendChild(option);
+                    });
+                } else {
+                    // Fallback to getting servers from logs collection
+                    const fallbackResponse = await fetch(`api/servers`);
+                    const servers = await fallbackResponse.json();
+                    serverFilter.innerHTML = '<option value="">All Servers</option>';
+                    servers.forEach(server => {
+                        const option = document.createElement('option');
+                        option.value = server;
+                        option.textContent = server;
+                        serverFilter.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading servers:', error);
+
+                // Try fallback if first attempt fails
+                try {
+                    const fallbackResponse = await fetch(`api/servers`);
+                    const servers = await fallbackResponse.json();
+                    serverFilter.innerHTML = '<option value="">All Servers</option>';
+                    servers.forEach(server => {
+                        const option = document.createElement('option');
+                        option.value = server;
+                        option.textContent = server;
+                        serverFilter.appendChild(option);
+                    });
+                } catch (fallbackError) {
+                    console.error('Error loading servers (fallback):', fallbackError);
+                }
+            }
+        }
+
+        // Fetch logs using applied filters
+        async function loadLogs() {
+            try {
+                const params = new URLSearchParams();
+                params.append('page', currentPage);
+                params.append('limit', itemsPerPage);
+                if (serverFilter.value) params.append('serverId', serverFilter.value);
+                if (levelFilter.value) params.append('level', levelFilter.value);
+                if (messageFilter.value) params.append('message', messageFilter.value);
+                if (requestIdFilter.value) params.append('requestId', requestIdFilter.value);
+                if (startDate.value) params.append('startDate', startDate.value);
+                if (endDate.value) params.append('endDate', endDate.value);
+                const response = await fetch(`/api/logs?${params.toString()}`);
+                const data = await response.json();
+                totalPages = data.pagination.pages;
+                renderPagination();
+                renderLogs(data.logs);
+            } catch (error) {
+                console.error('Error loading logs:', error);
+            }
+        }
+
+        // Render the log entries in the List tab
+        function renderLogs(logs) {
+            logEntries.innerHTML = '';
+            logs.forEach(log => {
+                const logEntry = document.createElement('div');
+                logEntry.className = `log-entry log-${log.level}`;
+                const logTime = new Date(log.timestamp).toLocaleString();
+
+                // Handle different ways serverId might be presented
+                let serverName = 'Unknown';
+                if (log.serverId) {
+                    serverName = log.serverId;
+                } else if (log.metadata && log.metadata.serverId) {
+                    serverName = log.metadata.serverId;
+                } else if (log.metadata && log.metadata.metadata && log.metadata.metadata.serverId) {
+                    serverName = log.metadata.metadata.serverId;
+                }
+
+                const reqId = log.requestId || '';
+
+                logEntry.innerHTML = `
+                    <div class="row">
+                        <div class="col-md-2"><span class="timestamp">${logTime}</span></div>
+                        <div class="col-md-1">${log.level.toUpperCase()}</div>
+                        <div class="col-md-2">${serverName}</div>
+                        <div class="col-md-7">
+                            ${sanitizeHTML(log.message)}
+                            ${reqId ? `<small class="text-muted ms-2">(${sanitizeHTML(reqId)})</small>` : ''}
+                            <button class="btn btn-sm btn-link toggle-details">Details</button>
+                        </div>
+                    </div>
+                    <div class="log-details">
+                        <pre>${sanitizeHTML(JSON.stringify(log, null, 2))}</pre>
+                    </div>
+                `;
+                // Toggle log details and update Details tab
+                logEntry.querySelector('.toggle-details').addEventListener('click', () => {
+                    const detailsElem = logEntry.querySelector('.log-details');
+                    if (detailsElem.style.display === 'block') {
+                        detailsElem.style.display = 'none';
+                        logEntry.querySelector('.toggle-details').textContent = 'Details';
+                    } else {
+                        detailsElem.style.display = 'block';
+                        logEntry.querySelector('.toggle-details').textContent = 'Hide';
+                        updateDetailsTab(log);
+                    }
+                });
+                logEntries.appendChild(logEntry);
+            });
+        }
+
+        // Render pagination controls based on current page
+        function renderPagination() {
+            pagination.innerHTML = '';
+            // Previous Button
+            const prevLi = document.createElement('li');
+            prevLi.className = `page-item ${currentPage === 1 ? 'disabled' : ''}`;
+            const prevLink = document.createElement('a');
+            prevLink.className = 'page-link';
+            prevLink.href = '#';
+            prevLink.textContent = 'Previous';
+            prevLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (currentPage > 1) {
+                    currentPage--;
+                    loadLogs();
+                }
+            });
+            prevLi.appendChild(prevLink);
+            pagination.appendChild(prevLi);
+            // Page Numbers
+            let startPage = Math.max(1, currentPage - 2);
+            let endPage = Math.min(totalPages, startPage + 4);
+            if (endPage - startPage < 4) {
+                startPage = Math.max(1, endPage - 4);
+            }
+            for (let i = startPage; i <= endPage; i++) {
+                const pageLi = document.createElement('li');
+                pageLi.className = `page-item ${i === currentPage ? 'active' : ''}`;
+                const pageLink = document.createElement('a');
+                pageLink.className = 'page-link';
+                pageLink.href = '#';
+                pageLink.textContent = i;
+                pageLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    currentPage = i;
+                    loadLogs();
+                });
+                pageLi.appendChild(pageLink);
+                pagination.appendChild(pageLi);
+            }
+            // Next Button
+            const nextLi = document.createElement('li');
+            nextLi.className = `page-item ${currentPage === totalPages ? 'disabled' : ''}`;
+            const nextLink = document.createElement('a');
+            nextLink.className = 'page-link';
+            nextLink.href = '#';
+            nextLink.textContent = 'Next';
+            nextLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    loadLogs();
+                }
+            });
+            nextLi.appendChild(nextLink);
+            pagination.appendChild(nextLi);
+        }
+
+        // Fetch and display log statistics in the Stats tab
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+                const logStats = document.getElementById('logStats');
+                logStats.innerHTML = `
+                    <p>Total Logs: ${stats.totalLogs}</p>
+                    <p>Error Logs: ${stats.errorCount}</p>
+                    <p>Warning Logs: ${stats.warnCount}</p>
+                    <p>Info Logs: ${stats.infoCount}</p>
+                    <p>Unique Servers: ${stats.serverCount}</p>
+                `;
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        // Update the Details tab with the selected log's details
+        function updateDetailsTab(log) {
+            const logDetails = document.getElementById('logDetails');
+            logDetails.innerHTML = `
+                <h5>Log Details</h5>
+                <pre>${sanitizeHTML(JSON.stringify(log, null, 2))}</pre>
+            `;
+            // Programmatically switch to the Details tab
+            const detailsTab = new bootstrap.Tab(document.getElementById('details-tab'));
+            detailsTab.show();
+        }
+
+        // Simple HTML sanitization to prevent XSS (for demonstration purposes)
+        function sanitizeHTML(str) {
+            const temp = document.createElement('div');
+            temp.textContent = str;
+            return temp.innerHTML;
+        }
+    });
+</script>
+</body>
+</html>

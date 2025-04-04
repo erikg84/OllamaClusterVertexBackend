@@ -5,6 +5,10 @@ server:
   queueSize: 100
   concurrency: 5
 
+mongodb:
+  uri: "mongodb://192.168.68.145:27017/logs"
+  database: "logs"
+
 nodes:
   - name: "MAC_STUDIO"
     host: "192.168.68.143"

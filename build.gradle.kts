@@ -40,6 +40,7 @@ dependencies {
     implementation("com.fasterxml.uuid:java-uuid-generator:4.2.0")
     implementation("io.vertx:vertx-web-api-contract:4.5.1")
     testImplementation(kotlin("test"))
+    implementation("io.vertx:vertx-mongo-client:4.4.4")
 }
 
 tasks.test {

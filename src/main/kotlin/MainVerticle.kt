@@ -5,8 +5,11 @@ import com.dallaslabs.handlers.*
 import com.dallaslabs.models.Node
 import com.dallaslabs.services.AdminService
 import com.dallaslabs.services.ClusterService
+import com.dallaslabs.services.LogService
 import com.dallaslabs.services.NodeService
 import com.dallaslabs.utils.Queue
+import io.vertx.core.json.JsonObject
+import io.vertx.ext.mongo.MongoClient
 import io.vertx.ext.web.Router
 import io.vertx.ext.web.handler.BodyHandler
 import io.vertx.ext.web.handler.StaticHandler
@@ -42,12 +45,19 @@ class MainVerticle : CoroutineVerticle() {
             )
         }
 
+        val mongoConfig = JsonObject()
+            .put("connection_string", "mongodb://192.168.68.145:27017/logs")
+            .put("db_name", "logs")
+        val mongoClient = MongoClient.createShared(vertx, mongoConfig)
+
         // Initialize services and handlers
         val queue = Queue(vertx, concurrency)
         val nodeService = NodeService(vertx, nodes)
         val clusterService = ClusterService(nodeService)
         val adminService = AdminService(vertx, nodeService, queue)
+        val logService = LogService(vertx, mongoClient)
 
+        val logViewerHandler = LogViewerHandler(vertx, logService, nodeService)
         val healthHandler = HealthHandler()
         val nodeHandler = NodeHandler(vertx, nodeService)
         val generateHandler = GenerateHandler(vertx, queue, nodes)
@@ -62,6 +72,16 @@ class MainVerticle : CoroutineVerticle() {
         router.route().handler(RequestIdHandler.create())
         router.route().handler(LoggingHandler.create(vertx))
 
+        router.get("/api/logs").handler { logViewerHandler.getLogs(it) }
+        router.get("/api/servers").handler { logViewerHandler.getServers(it) }
+        router.get("/api/levels").handler { logViewerHandler.getLevels(it) }
+        router.get("/api/stats").handler { logViewerHandler.getStats(it) }
+        router.get("/logviewer/api/logs").handler { logViewerHandler.getLogs(it) }
+        router.get("/logviewer/api/servers").handler { logViewerHandler.getServers(it) }
+        router.get("/logviewer/api/levels").handler { logViewerHandler.getLevels(it) }
+        router.get("/logviewer/api/stats").handler { logViewerHandler.getStats(it) }
+        router.get("/api/nodes/names").handler { logViewerHandler.getNodes(it) }
+
         router.get("/swagger-ui.html").handler(StaticHandler.create("static"))
         router.get("/openapi.yaml").handler(StaticHandler.create("static"))
         router.route("/static/*").handler(StaticHandler.create("static"))
@@ -75,7 +95,7 @@ class MainVerticle : CoroutineVerticle() {
         router.get("/api/queue/status").handler { queueHandler.getStatus(it) }
         router.post("/api/queue/pause").handler { queueHandler.pauseQueue(it) }
         router.post("/api/queue/resume").handler { queueHandler.resumeQueue(it) }
-        
+
         router.post("/api/generate").handler { generateHandler.handle(it) }
         router.post("/api/chat").handler { chatHandler.handle(it) }
 
@@ -93,6 +113,10 @@ class MainVerticle : CoroutineVerticle() {
         router.post("/api/cluster/reset-stats").handler { clusterHandler.resetClusterStats(it) }
         router.get("/api/cluster/logs").handler { clusterHandler.getClusterLogs(it) }
 
+        router.route("/logviewer/*").handler(StaticHandler.create("webroot/logviewer"))
+        router.get("/logviewer").handler { ctx ->
+            ctx.reroute("/logviewer/index.html")
+        }
         router.get("/test").handler { ctx ->
             ctx.response().end("Router is working!")
         }
