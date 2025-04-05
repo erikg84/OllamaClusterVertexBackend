@@ -35,7 +35,7 @@ nodes:
     platform: "windows"
     capabilities: ["avx512", "parallel"]
   - name: "BlackHP"
-    host: "localhost"
+    host: "192.168.68.145"
     port: 3000
     type: "cpu"
     platform: "windows"

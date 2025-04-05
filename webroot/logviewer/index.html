@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>Centralized Log Viewer</title>
-    <base href="/logviewer/" />
+    <base href="/logviewer/"/>
     <!-- Bootstrap 5 -->
     <link
             href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
@@ -16,47 +16,120 @@
             background-color: #1e1e1e;
             color: #f8f9fa;
         }
+
         .bg-dark-panel {
             background-color: #2a2a2a;
         }
+
         .sidebar {
             min-height: 100vh;
             border-right: 1px solid #444;
         }
+
         .card-dark {
             background-color: #2a2a2a;
             border: 1px solid #3a3a3a;
         }
+
         .card-dark .card-header {
             border-bottom: 1px solid #3a3a3a;
         }
+
         .text-secondary-light {
             color: #ced4da;
         }
+
         /* Log level colors */
-        .log-error { color: #ff5252; }
-        .log-warn { color: #ffc107; }
-        .log-info { color: #0dcaf0; }
-        .log-debug { color: #adb5bd; }
+        .log-error {
+            color: #ff5252;
+        }
+
+        .log-warn {
+            color: #ffc107;
+        }
+
+        .log-info {
+            color: #0dcaf0;
+        }
+
+        .log-debug {
+            color: #adb5bd;
+        }
+
         /* Pagination override */
         .pagination .page-link {
             background-color: #2a2a2a;
             color: #f8f9fa;
             border: 1px solid #444;
         }
+
         .pagination .page-item.active .page-link {
             background-color: #0dcaf0;
             border-color: #0dcaf0;
         }
+
         /* Log entry styling */
         .log-entry {
             border-bottom: 1px solid #444;
             padding: 8px 0;
         }
+
         .log-entry:hover {
             background-color: #343a40;
             cursor: pointer;
         }
+
+        .btn-chevron {
+            font-size: 1.8rem; /* Bigger icon */
+            line-height: 1; /* Keep it tight */
+            color: #0dcaf0;
+            background: none;
+            border: none;
+            float: right;
+            padding: 0;
+            margin: 0;
+            height: 100%; /* Fill the row height */
+            display: flex;
+            align-items: center; /* Vertically center */
+            justify-content: center;
+            text-decoration: none;
+        }
+
+
+        .btn-chevron:hover {
+            color: #0dcaf0;
+            opacity: 0.8;
+            text-decoration: none;
+        }
+
+        .nav-tabs .nav-link {
+            color: #0dcaf0 !important;
+        }
+
+        .nav-tabs .nav-link.active {
+            background-color: #1e1e1e;
+            border-color: #0dcaf0;
+            color: #0dcaf0 !important;
+        }
+
+        #logDetails,
+        #logDetails *,
+        #details .card-header {
+            color: #0dcaf0 !important;
+        }
+
+        #list .card-header,
+        #list .card-body,
+        #list .card-body * {
+            color: #0dcaf0 !important;
+        }
+
+        #logStats,
+        #logStats *,
+        #stats .card-header {
+            color: #0dcaf0 !important;
+        }
+
         .log-details {
             display: none;
             background-color: #3a3a3a;
@@ -377,26 +450,19 @@
                         <div class="col-md-1">${log.level.toUpperCase()}</div>
                         <div class="col-md-2">${serverName}</div>
                         <div class="col-md-7">
-                            ${sanitizeHTML(log.message)}
-                            ${reqId ? `<small class="text-muted ms-2">(${sanitizeHTML(reqId)})</small>` : ''}
-                            <button class="btn btn-sm btn-link toggle-details">Details</button>
-                        </div>
+                        ${sanitizeHTML(log.message)}
+                        ${reqId ? `<small class="text-muted ms-2">(${sanitizeHTML(reqId)})</small>` : ''}
+                        <button class="btn btn-chevron view-details"
+                        data-log='${JSON.stringify(log)}'>&rsaquo;</button>
+                    </div>
+
                     </div>
                     <div class="log-details">
                         <pre>${sanitizeHTML(JSON.stringify(log, null, 2))}</pre>
                     </div>
                 `;
-                // Toggle log details and update Details tab
-                logEntry.querySelector('.toggle-details').addEventListener('click', () => {
-                    const detailsElem = logEntry.querySelector('.log-details');
-                    if (detailsElem.style.display === 'block') {
-                        detailsElem.style.display = 'none';
-                        logEntry.querySelector('.toggle-details').textContent = 'Details';
-                    } else {
-                        detailsElem.style.display = 'block';
-                        logEntry.querySelector('.toggle-details').textContent = 'Hide';
-                        updateDetailsTab(log);
-                    }
+                logEntry.addEventListener('click', () => {
+                    updateDetailsTab(log);
                 });
                 logEntries.appendChild(logEntry);
             });
@@ -482,7 +548,6 @@
         function updateDetailsTab(log) {
             const logDetails = document.getElementById('logDetails');
             logDetails.innerHTML = `
-                <h5>Log Details</h5>
                 <pre>${sanitizeHTML(JSON.stringify(log, null, 2))}</pre>
             `;
             // Programmatically switch to the Details tab

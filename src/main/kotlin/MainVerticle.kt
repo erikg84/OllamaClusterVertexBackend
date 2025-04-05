@@ -82,9 +82,9 @@ class MainVerticle : CoroutineVerticle() {
         router.get("/logviewer/api/stats").handler { logViewerHandler.getStats(it) }
         router.get("/api/nodes/names").handler { logViewerHandler.getNodes(it) }
 
-        router.get("/swagger-ui.html").handler(StaticHandler.create("static"))
-        router.get("/openapi.yaml").handler(StaticHandler.create("static"))
-        router.route("/static/*").handler(StaticHandler.create("static"))
+        router.get("/swagger-ui.html").handler(StaticHandler.create("webroot/static"))
+        router.get("/openapi.yaml").handler(StaticHandler.create("webroot/static"))
+        router.route("/webroot/static/*").handler(StaticHandler.create("webroot/static"))
         router.get("/health").handler { healthHandler.handle(it) }
 
         router.get("/api/nodes").handler { nodeHandler.listNodes(it) }
@@ -113,6 +113,18 @@ class MainVerticle : CoroutineVerticle() {
         router.post("/api/cluster/reset-stats").handler { clusterHandler.resetClusterStats(it) }
         router.get("/api/cluster/logs").handler { clusterHandler.getClusterLogs(it) }
 
+        val staticHandler = StaticHandler.create()
+            .setWebRoot("webroot")
+            .setCachingEnabled(false)
+            .setDirectoryListing(false)
+        router.route("/static/*").handler(staticHandler)
+        router.get("/swagger-ui.html").handler { ctx ->
+            ctx.response().sendFile("webroot/static/swagger-ui.html")
+        }
+
+        router.get("/openapi.yaml").handler { ctx ->
+            ctx.response().sendFile("webroot/static/openapi.yaml")
+        }
         router.route("/logviewer/*").handler(StaticHandler.create("webroot/logviewer"))
         router.get("/logviewer").handler { ctx ->
             ctx.reroute("/logviewer/index.html")
