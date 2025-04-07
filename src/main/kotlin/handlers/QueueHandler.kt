@@ -2,6 +2,7 @@ package com.dallaslabs.handlers
 
 import com.dallaslabs.models.ApiResponse
 import com.dallaslabs.models.QueueStatus
+import com.dallaslabs.services.LogService
 import com.dallaslabs.utils.Queue
 import io.vertx.core.json.JsonObject
 import io.vertx.ext.web.RoutingContext
@@ -12,7 +13,7 @@ private val logger = KotlinLogging.logger {}
 /**
  * Handler for queue-related requests
  */
-class QueueHandler(private val queue: Queue) {
+class QueueHandler(private val queue: Queue, logService: LogService) {
 
     /**
      * Gets the current status of the queue

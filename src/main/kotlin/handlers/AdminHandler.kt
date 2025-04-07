@@ -2,6 +2,9 @@ package com.dallaslabs.handlers
 
 import com.dallaslabs.models.ApiResponse
 import com.dallaslabs.services.AdminService
+import com.dallaslabs.services.LoadBalancerService
+import com.dallaslabs.services.LogService
+import com.dallaslabs.services.PerformanceTrackerService
 import io.vertx.core.Vertx
 import io.vertx.core.json.JsonObject
 import io.vertx.ext.web.RoutingContext
@@ -18,7 +21,10 @@ private val logger = KotlinLogging.logger {}
  */
 class AdminHandler(
     private val vertx: Vertx,
-    private val adminService: AdminService
+    private val adminService: AdminService,
+    private val loadBalancerService: LoadBalancerService,
+    private val performanceTracker: PerformanceTrackerService,
+    logService: LogService,
 ) : CoroutineScope {
 
     override val coroutineContext: CoroutineContext
@@ -52,6 +58,31 @@ class AdminHandler(
         }
     }
 
+    fun getLoadBalancingMetrics(ctx: RoutingContext) {
+        val requestId = ctx.get<String>("requestId") ?: "unknown"
+        logger.info { "Load balancing metrics requested (requestId: $requestId)" }
+
+        launch {
+            try {
+                val metrics = loadBalancerService.getNodeMetrics()
+                val response = ApiResponse.success(metrics)
+
+                ctx.response()
+                    .putHeader("Content-Type", "application/json")
+                    .setStatusCode(200)
+                    .end(JsonObject.mapFrom(response).encode())
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to get load balancing metrics (requestId: $requestId)" }
+                val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
+
+                ctx.response()
+                    .putHeader("Content-Type", "application/json")
+                    .setStatusCode(500)
+                    .end(JsonObject.mapFrom(response).encode())
+            }
+        }
+    }
+
     /**
      * Gets Prometheus-formatted metrics
      */
@@ -69,6 +100,34 @@ class AdminHandler(
                     .end(metrics)
             } catch (e: Exception) {
                 logger.error(e) { "Failed to get Prometheus metrics (requestId: $requestId)" }
+                val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
+
+                ctx.response()
+                    .putHeader("Content-Type", "application/json")
+                    .setStatusCode(500)
+                    .end(JsonObject.mapFrom(response).encode())
+            }
+        }
+    }
+
+    /**
+     * Gets performance metrics
+     */
+    fun getPerformanceMetrics(ctx: RoutingContext) {
+        val requestId = ctx.get<String>("requestId") ?: "unknown"
+        logger.info { "Performance metrics requested (requestId: $requestId)" }
+
+        launch {
+            try {
+                val metrics = performanceTracker.getPerformanceMetrics()
+                val response = ApiResponse.success(metrics)
+
+                ctx.response()
+                    .putHeader("Content-Type", "application/json")
+                    .setStatusCode(200)
+                    .end(JsonObject.mapFrom(response).encode())
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to get performance metrics (requestId: $requestId)" }
                 val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
 
                 ctx.response()

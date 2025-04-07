@@ -165,4 +165,104 @@ class LogService(
             serverCount = serverCount
         )
     }
+
+    /**
+     * Log a message to MongoDB
+     * @param level Log level (info, warn, error, debug)
+     * @param message Log message
+     * @param metadata Additional metadata for the log entry
+     */
+    suspend fun log(
+        level: String,
+        message: String,
+        metadata: Map<String, Any> = emptyMap()
+    ) {
+        try {
+            val logEntry = JsonObject()
+                .put("level", level)
+                .put("message", message)
+                .put("timestamp", Date())
+                .put("metadata", JsonObject(metadata))
+
+            mongoClient.insert(COLLECTION, logEntry).coAwait()
+
+            logger.debug { "Log entry inserted successfully: $message" }
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to insert log entry to MongoDB" }
+        }
+    }
+
+    /**
+     * Log a system event
+     * @param message Event message
+     * @param type Event type (startup, shutdown, etc.)
+     */
+    suspend fun logSystemEvent(
+        message: String,
+        type: String = "system"
+    ) {
+        log("info", message, mapOf(
+            "eventType" to type,
+            "serverId" to getServerIdentity()
+        ))
+    }
+
+    /**
+     * Log an API request
+     * @param requestId Unique request identifier
+     * @param method HTTP method
+     * @param path Request path
+     * @param statusCode HTTP status code
+     * @param duration Request processing duration
+     */
+    suspend fun logApiRequest(
+        requestId: String,
+        method: String,
+        path: String,
+        statusCode: Int,
+        duration: Long
+    ) {
+        log("info", "API Request", mapOf(
+            "requestId" to requestId,
+            "method" to method,
+            "path" to path,
+            "statusCode" to statusCode,
+            "duration" to duration
+        ))
+    }
+
+    /**
+     * Log an error event
+     * @param message Error message
+     * @param error Optional exception
+     * @param context Additional context information
+     */
+    suspend fun logError(
+        message: String,
+        error: Throwable? = null,
+        context: Map<String, Any> = emptyMap()
+    ) {
+        val errorMetadata = mutableMapOf<String, Any>(
+            "errorMessage" to (error?.message ?: "Unknown error")
+        )
+        errorMetadata.putAll(context)
+
+        error?.let {
+            errorMetadata["stackTrace"] = it.stackTraceToString()
+        }
+
+        log("error", message, errorMetadata)
+    }
+
+    /**
+     * Get server identity for logging
+     */
+    private fun getServerIdentity(): Map<String, String> {
+        return mapOf(
+            "hostname" to java.net.InetAddress.getLocalHost().hostName,
+            "hostAddress" to java.net.InetAddress.getLocalHost().hostAddress,
+            "os" to System.getProperty("os.name"),
+            "arch" to System.getProperty("os.arch")
+        )
+    }
 }

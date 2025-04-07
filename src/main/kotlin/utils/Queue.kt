@@ -1,5 +1,6 @@
 package com.dallaslabs.utils
 
+import com.dallaslabs.services.LogService
 import io.vertx.core.Future
 import io.vertx.core.Promise
 import io.vertx.core.Vertx
@@ -13,7 +14,7 @@ private val logger = KotlinLogging.logger {}
 /**
  * A queue for processing tasks with concurrency control
  */
-class Queue(private val vertx: Vertx, private val concurrency: Int) {
+class Queue(private val vertx: Vertx, private val concurrency: Int, logService: LogService) {
 
     private val taskQueue = ConcurrentLinkedQueue<Task<*>>()
     private val activeCount = AtomicInteger(0)

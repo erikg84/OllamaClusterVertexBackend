@@ -2,6 +2,7 @@ package com.dallaslabs.handlers
 
 import com.dallaslabs.models.ApiResponse
 import com.dallaslabs.services.ClusterService
+import com.dallaslabs.services.LogService
 import io.vertx.core.Vertx
 import io.vertx.core.json.JsonObject
 import io.vertx.ext.web.RoutingContext
@@ -18,7 +19,8 @@ private val logger = KotlinLogging.logger {}
  */
 class ClusterHandler(
     private val vertx: Vertx,
-    private val clusterService: ClusterService
+    private val clusterService: ClusterService,
+    logService: LogService
 ) : CoroutineScope {
 
     override val coroutineContext: CoroutineContext

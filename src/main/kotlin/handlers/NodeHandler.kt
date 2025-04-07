@@ -2,11 +2,11 @@ package com.dallaslabs.handlers
 
 import com.dallaslabs.models.ApiResponse
 import com.dallaslabs.models.NodeStatus
+import com.dallaslabs.services.LogService
 import com.dallaslabs.services.NodeService
 import io.vertx.core.Vertx
 import io.vertx.core.json.JsonObject
 import io.vertx.ext.web.RoutingContext
-import io.vertx.kotlin.coroutines.await
 import io.vertx.kotlin.coroutines.coAwait
 import io.vertx.kotlin.coroutines.dispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -21,7 +21,8 @@ private val logger = KotlinLogging.logger {}
  */
 class NodeHandler(
     private val vertx: Vertx,
-    private val nodeService: NodeService
+    private val nodeService: NodeService,
+    logService: LogService
 ) : CoroutineScope {
 
     override val coroutineContext: CoroutineContext

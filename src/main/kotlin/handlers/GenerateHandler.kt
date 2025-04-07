@@ -3,6 +3,10 @@ package com.dallaslabs.handlers
 import com.dallaslabs.models.ApiResponse
 import com.dallaslabs.models.GenerateRequest
 import com.dallaslabs.models.Node
+import com.dallaslabs.services.LoadBalancerService
+import com.dallaslabs.services.LogService
+import com.dallaslabs.services.ModelRegistryService
+import com.dallaslabs.services.PerformanceTrackerService
 import com.dallaslabs.utils.Queue
 import io.vertx.core.Vertx
 import io.vertx.core.buffer.Buffer
@@ -25,7 +29,11 @@ private val logger = KotlinLogging.logger {}
 class GenerateHandler(
     private val vertx: Vertx,
     private val queue: Queue,
-    private val nodes: List<Node>
+    private val modelRegistry: ModelRegistryService,
+    private val loadBalancer: LoadBalancerService,
+    private val nodes: List<Node>,
+    private val performanceTracker: PerformanceTrackerService,
+    logService: LogService
 ) : CoroutineScope {
 
     override val coroutineContext: CoroutineContext
@@ -70,32 +78,69 @@ class GenerateHandler(
             // Process the request
             launch {
                 try {
+                    val startTime = System.currentTimeMillis()
                     val result = queue.add<JsonObject> {
-                        // Select appropriate node based on model and availability
-                        // For now just use the first node
-                        if (nodes.isEmpty()) {
-                            throw IllegalStateException("No nodes available")
+
+                        if (!modelRegistry.isModelAvailable(req.model)) {
+                            throw IllegalArgumentException("Model ${req.model} is not available on any node")
                         }
 
-                        val node = nodes[0]
+                        // Get the best node for this model using the load balancer
+                        val nodeName = loadBalancer.selectBestNodeForModel(req.model)
+
+                        if (nodeName == null) {
+                            throw IllegalStateException("No suitable node found for model ${req.model}")
+                        }
+
+                        val node = nodes.find { it.name == nodeName }
+                            ?: throw IllegalStateException("Node $nodeName not found in configuration")
 
                         logger.info {
-                            "Forwarding generate request to node: ${node.name} " +
+                            "Selected node ${node.name} for generate request with model ${req.model} " +
                                     "(requestId: $requestId)"
                         }
 
-                        // Forward request to the selected node
-                        val response = webClient.post(node.port, node.host, "/generate")
-                            .putHeader("Content-Type", "application/json")
-                            .putHeader("X-Request-ID", requestId)
-                            .sendBuffer(Buffer.buffer(JsonObject.mapFrom(req).encode()))
-                            .coAwait()
+                        val requestWithNode = req.copy(node = node.name)
 
-                        if (response.statusCode() != 200) {
-                            throw RuntimeException("Node returned status ${response.statusCode()}")
+                        performanceTracker.recordRequestStart(node.name)
+
+                        try {
+                            // Forward request to the selected node
+                            val response = webClient.post(node.port, node.host, "/generate")
+                                .putHeader("Content-Type", "application/json")
+                                .putHeader("X-Request-ID", requestId)
+                                .sendBuffer(Buffer.buffer(JsonObject.mapFrom(requestWithNode).encode()))
+                                .coAwait()
+
+                            if (response.statusCode() != 200) {
+                                loadBalancer.recordFailure(node.name)
+                                throw RuntimeException("Node ${node.name} returned status ${response.statusCode()}")
+                            }
+
+                            // Record success
+                            val endTime = System.currentTimeMillis()
+                            val processingTime = endTime - startTime
+                            loadBalancer.recordSuccess(node.name, endTime - startTime)
+
+                            val responseJson = response.bodyAsJsonObject()
+                            val promptTokens = responseJson.getInteger("prompt_eval_count", 0)
+                            val completionTokens = responseJson.getInteger("eval_count", 0)
+
+                            // Record performance metrics
+                            performanceTracker.recordRequest(
+                                nodeName = node.name,
+                                modelId = req.model,
+                                promptTokens = promptTokens,
+                                completionTokens = completionTokens,
+                                processingTimeMs = processingTime
+                            )
+
+                            response.bodyAsJsonObject()
+                        } catch (e: Exception) {
+                            // Record failure
+                            loadBalancer.recordFailure(node.name)
+                            throw e
                         }
-
-                        response.bodyAsJsonObject()
                     }.coAwait()
 
                     ctx.response()

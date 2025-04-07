@@ -1,5 +1,7 @@
 package com.dallaslabs.models
 
+import com.dallaslabs.services.LoadBalancerService
+
 /**
  * Represents cluster status
  */
@@ -49,7 +51,8 @@ data class Metrics(
     val failedRequests: Long,
     val queueSize: Int,
     val activeNodes: Int,
-    val totalNodes: Int
+    val totalNodes: Int,
+    val loadBalancerNodeMetrics: Map<String, LoadBalancerService.LoadBalancerNodeMetrics>
 )
 
 /**

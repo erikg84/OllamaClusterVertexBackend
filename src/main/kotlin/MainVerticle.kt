@@ -3,10 +3,7 @@ package com.dallaslabs
 import com.dallaslabs.config.ConfigLoader
 import com.dallaslabs.handlers.*
 import com.dallaslabs.models.Node
-import com.dallaslabs.services.AdminService
-import com.dallaslabs.services.ClusterService
-import com.dallaslabs.services.LogService
-import com.dallaslabs.services.NodeService
+import com.dallaslabs.services.*
 import com.dallaslabs.utils.Queue
 import io.vertx.core.json.JsonObject
 import io.vertx.ext.mongo.MongoClient
@@ -34,7 +31,7 @@ class MainVerticle : CoroutineVerticle() {
 
         val nodesArray = config.getJsonArray("nodes")
         val nodes = nodesArray.map { nodeJson ->
-            val node = nodeJson as io.vertx.core.json.JsonObject
+            val node = nodeJson as JsonObject
             Node(
                 name = node.getString("name"),
                 host = node.getString("host"),
@@ -49,22 +46,22 @@ class MainVerticle : CoroutineVerticle() {
             .put("connection_string", "mongodb://192.168.68.145:27017/logs")
             .put("db_name", "logs")
         val mongoClient = MongoClient.createShared(vertx, mongoConfig)
-
-        // Initialize services and handlers
-        val queue = Queue(vertx, concurrency)
-        val nodeService = NodeService(vertx, nodes)
-        val clusterService = ClusterService(nodeService)
-        val adminService = AdminService(vertx, nodeService, queue)
         val logService = LogService(vertx, mongoClient)
-
-        val logViewerHandler = LogViewerHandler(vertx, logService, nodeService)
-        val healthHandler = HealthHandler()
-        val nodeHandler = NodeHandler(vertx, nodeService)
-        val generateHandler = GenerateHandler(vertx, queue, nodes)
-        val chatHandler = ChatHandler(vertx, queue, nodes)
-        val queueHandler = QueueHandler(queue)
-        val clusterHandler = ClusterHandler(vertx, clusterService)
-        val adminHandler = AdminHandler(vertx, adminService)
+        val performanceTrackerService = PerformanceTrackerService(vertx, logService)
+        val queue = Queue(vertx, concurrency, logService)
+        val nodeService = NodeService(vertx, nodes, logService)
+        val modelRegistryService = ModelRegistryService(vertx, nodeService, logService)
+        val clusterService = ClusterService(nodeService, modelRegistryService, vertx, logService)
+        val loadBalancerService = LoadBalancerService(vertx, nodeService, modelRegistryService, performanceTrackerService, logService)
+        val adminService = AdminService(vertx, nodeService, loadBalancerService, queue, logService)
+        val logViewerHandler = LogViewerHandler(vertx, logService, nodeService, logService)
+        val healthHandler = HealthHandler(logService)
+        val nodeHandler = NodeHandler(vertx, nodeService, logService)
+        val generateHandler = GenerateHandler(vertx, queue, modelRegistryService, loadBalancerService, nodes, performanceTrackerService, logService)
+        val chatHandler = ChatHandler(vertx, queue, modelRegistryService, nodeService, nodes, performanceTrackerService, loadBalancerService, logService)
+        val queueHandler = QueueHandler(queue, logService)
+        val clusterHandler = ClusterHandler(vertx, clusterService, logService)
+        val adminHandler = AdminHandler(vertx, adminService, loadBalancerService, performanceTrackerService, logService)
 
         val router = Router.router(vertx)
 
@@ -105,6 +102,8 @@ class MainVerticle : CoroutineVerticle() {
         router.get("/admin/health").handler { adminHandler.getNodeHealth(it) }
         router.get("/admin/system").handler { adminHandler.getSystemInfo(it) }
         router.post("/admin/reset-stats").handler { adminHandler.resetStatistics(it) }
+        router.get("/admin/load-balancing").handler { adminHandler.getLoadBalancingMetrics(it) }
+        router.get("/admin/performance").handler { adminHandler.getPerformanceMetrics(it) }
 
         router.get("/api/cluster/models").handler { clusterHandler.getAllModels(it) }
         router.get("/api/cluster/models/:modelId").handler { clusterHandler.checkModelAvailability(it) }
@@ -139,8 +138,7 @@ class MainVerticle : CoroutineVerticle() {
             .coAwait()
 
         logger.info { "Server started on port ${server.actualPort()}" }
-        logger.info { "🚀 Server running at http://localhost:${server.actualPort()}/swagger-ui.html" }
-        logger.info { "📄 OpenAPI spec at http://localhost:${server.actualPort()}/openapi.yaml" }
+        logger.info { "🚀 Server running at http://localhost:${server.actualPort()}/logviewer" }
 
         Runtime.getRuntime().addShutdownHook(Thread {
             logger.info { "Shutting down server..." }

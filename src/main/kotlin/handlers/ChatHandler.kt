@@ -3,6 +3,7 @@ package com.dallaslabs.handlers
 import com.dallaslabs.models.ApiResponse
 import com.dallaslabs.models.ChatRequest
 import com.dallaslabs.models.Node
+import com.dallaslabs.services.*
 import com.dallaslabs.utils.Queue
 import io.vertx.core.Vertx
 import io.vertx.core.buffer.Buffer
@@ -25,7 +26,12 @@ private val logger = KotlinLogging.logger {}
 class ChatHandler(
     private val vertx: Vertx,
     private val queue: Queue,
-    private val nodes: List<Node>
+    private val modelRegistry: ModelRegistryService,
+    private val nodeService: NodeService,
+    private val nodes: List<Node>,
+    private val performanceTracker: PerformanceTrackerService,
+    private val loadBalancer: LoadBalancerService,
+    logService: LogService
 ) : CoroutineScope {
 
     override val coroutineContext: CoroutineContext
@@ -69,30 +75,58 @@ class ChatHandler(
             // Process the request
             launch {
                 try {
+                    val startTime = System.currentTimeMillis()
                     val result = queue.add<JsonObject> {
-                        // Select appropriate node based on model and availability
-                        // For now just use the first node
-                        if (nodes.isEmpty()) {
-                            throw IllegalStateException("No nodes available")
+                        if (!modelRegistry.isModelAvailable(req.model)) {
+                            throw IllegalArgumentException("Model ${req.model} is not available on any node")
                         }
 
-                        val node = nodes[0]
+                        val nodeName = nodeService.getBestNodeForModel(req.model)
+
+                        if (nodeName == null) {
+                            throw IllegalStateException("No suitable node found for model ${req.model}")
+                        }
+
+                        val node = nodes.find { it.name == nodeName }
+                            ?: throw IllegalStateException("Node $nodeName not found in configuration")
 
                         logger.info {
-                            "Forwarding chat request to node: ${node.name} " +
+                            "Selected node ${node.name} for chat request with model ${req.model} " +
                                     "(requestId: $requestId)"
                         }
+
+                        // Add node name to the request
+                        val requestWithNode = req.copy(node = node.name)
+
+                        performanceTracker.recordRequestStart(node.name)
 
                         // Forward request to the selected node
                         val response = webClient.post(node.port, node.host, "/chat")
                             .putHeader("Content-Type", "application/json")
                             .putHeader("X-Request-ID", requestId)
-                            .sendBuffer(Buffer.buffer(JsonObject.mapFrom(req).encode()))
+                            .sendBuffer(Buffer.buffer(JsonObject.mapFrom(requestWithNode).encode()))
                             .coAwait()
 
                         if (response.statusCode() != 200) {
-                            throw RuntimeException("Node returned status ${response.statusCode()}")
+                            throw RuntimeException("Node ${node.name} returned status ${response.statusCode()}")
                         }
+
+                        val responseJson = response.bodyAsJsonObject()
+                        val usage = responseJson.getJsonObject("usage") ?: JsonObject()
+                        val promptTokens = usage.getInteger("prompt_tokens", 0)
+                        val completionTokens = usage.getInteger("completion_tokens", 0)
+
+                        val endTime = System.currentTimeMillis()
+                        val processingTime = endTime - startTime
+                        loadBalancer.recordSuccess(node.name, processingTime)
+
+                        performanceTracker.recordRequest(
+                            nodeName = node.name,
+                            modelId = req.model,
+                            promptTokens = promptTokens,
+                            completionTokens = completionTokens,
+                            processingTimeMs = processingTime
+                        )
 
                         response.bodyAsJsonObject()
                     }.coAwait()

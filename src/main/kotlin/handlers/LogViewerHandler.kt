@@ -21,7 +21,8 @@ private val logger = KotlinLogging.logger {}
 class LogViewerHandler(
     private val vertx: Vertx,
     private val logService: LogService,
-    private val nodeService: NodeService
+    private val nodeService: NodeService,
+    logService1: LogService
 ) : CoroutineScope {
 
     override val coroutineContext: CoroutineContext

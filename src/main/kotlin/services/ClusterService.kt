@@ -1,11 +1,12 @@
 package com.dallaslabs.services
 
 import com.dallaslabs.models.*
+import io.vertx.core.Vertx
 import io.vertx.kotlin.coroutines.coAwait
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import io.vertx.kotlin.coroutines.dispatcher
+import kotlinx.coroutines.*
 import mu.KotlinLogging
+import kotlin.coroutines.CoroutineContext
 
 private val logger = KotlinLogging.logger {}
 
@@ -13,8 +14,21 @@ private val logger = KotlinLogging.logger {}
  * Service for cluster operations
  */
 class ClusterService(
-    private val nodeService: NodeService
-) {
+    private val nodeService: NodeService,
+    private val modelRegistry: ModelRegistryService,
+    private val vertx: Vertx,
+    logService: LogService
+): CoroutineScope {
+
+    override val coroutineContext: CoroutineContext
+        get() = vertx.dispatcher()
+
+    init {
+        launch {
+            modelRegistry.refreshRegistry()
+        }
+    }
+
     /**
      * Gets the overall cluster status
      */
@@ -44,22 +58,18 @@ class ClusterService(
             status = if (onlineCount > 0) "healthy" else "degraded"
         )
 
-        val uniqueModels = mutableSetOf<String>()
-        var availableNodes = 0
-
+        val uniqueModels = modelRegistry.getAllModels().map { it.id }.toSet()
         for (nodeStatus in nodeStatuses) {
             val nodeName = nodeStatus.node.name
             status.nodesStatus[nodeName] = nodeStatus.status
 
             if (nodeStatus.status == "online") {
-                availableNodes++
-
-                // Try to get models for online nodes
                 try {
-                    val models = nodeService.getNodeModels(nodeName).coAwait()
-                    val modelIds = models.map { it.id }
+                    val modelIds = modelRegistry.getAllModels()
+                        .filter { it.node == nodeName }
+                        .map { it.id }
+
                     status.modelsAvailable[nodeName] = modelIds
-                    uniqueModels.addAll(modelIds)
                 } catch (e: Exception) {
                     logger.error(e) { "Failed to get models for node: $nodeName" }
                     // Continue with other nodes
@@ -68,7 +78,7 @@ class ClusterService(
         }
 
         return status.copy(
-            availableNodes = availableNodes,
+            availableNodes = onlineCount,
             totalModels = uniqueModels.size
         )
     }
@@ -76,56 +86,17 @@ class ClusterService(
     /**
      * Gets all models available across the cluster
      */
-    suspend fun getAllModels(): List<ModelInfo> {
+    fun getAllModels(): List<ModelInfo> {
         logger.info { "Getting all models in the cluster" }
-
-        val models = mutableListOf<ModelInfo>()
-        val modelSet = mutableSetOf<String>()
-
-        // Get online nodes
-        val nodeStatuses = nodeService.getAllNodesStatus().coAwait()
-        val onlineNodes = nodeStatuses.filter { it.status == "online" }.map { it.node }
-
-        // Collect models from each node
-        for (node in onlineNodes) {
-            try {
-                val nodeModels = nodeService.getNodeModels(node.name).coAwait()
-                nodeModels.forEach { model ->
-                    modelSet.add(model.id)
-                    models.add(model.copy(node = node.name))
-                }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to get models from node: ${node.name}" }
-                // Continue with other nodes
-            }
-        }
-
-        return models
+        return modelRegistry.getAllModels()
     }
 
     /**
      * Checks availability of a specific model
      */
-    suspend fun checkModelAvailability(modelId: String): ModelAvailability {
+    fun checkModelAvailability(modelId: String): ModelAvailability {
         logger.info { "Checking availability of model: $modelId" }
-
-        val nodeStatuses = nodeService.getAllNodesStatus().coAwait()
-        val onlineNodes = nodeStatuses.filter { it.status == "online" }.map { it.node }
-
-        val availableNodes = mutableListOf<String>()
-
-        // Check each node for the model
-        for (node in onlineNodes) {
-            try {
-                val nodeModels = nodeService.getNodeModels(node.name).coAwait()
-                if (nodeModels.any { it.id == modelId }) {
-                    availableNodes.add(node.name)
-                }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to check model availability on node: ${node.name}" }
-                // Continue with other nodes
-            }
-        }
+        val availableNodes = modelRegistry.getNodesForModel(modelId)
 
         return ModelAvailability(
             modelId = modelId,

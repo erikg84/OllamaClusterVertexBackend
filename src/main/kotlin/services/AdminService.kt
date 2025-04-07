@@ -18,20 +18,19 @@ private val logger = KotlinLogging.logger {}
 class AdminService(
     private val vertx: Vertx,
     private val nodeService: NodeService,
-    private val queue: Queue
+    private val loadBalancer: LoadBalancerService,
+    private val queue: Queue,
+    logService: LogService
 ) {
     private val startTime = Instant.now()
 
-    // Request statistics
     private val totalRequests = AtomicLong(0)
     private val successfulRequests = AtomicLong(0)
     private val failedRequests = AtomicLong(0)
     private val requestLatencies = ConcurrentHashMap<String, Long>()
 
-    // Initialize the metrics
     init {
-        // Set up a periodic metrics collector
-        vertx.setPeriodic(60000) { // Every minute
+        vertx.setPeriodic(60000) {
             logger.debug { "Collecting metrics..." }
             // This would be expanded in a real implementation
         }
@@ -59,6 +58,13 @@ class AdminService(
         val uptime = Instant.now().epochSecond - startTime.epochSecond
         val nodeStatuses = nodeService.getAllNodesStatus().coAwait()
 
+        val loadBalancingMetrics = try {
+            loadBalancer.getNodeMetrics()
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get load balancing metrics" }
+            emptyMap()
+        }
+
         return Metrics(
             uptime = uptime,
             totalRequests = totalRequests.get(),
@@ -66,7 +72,8 @@ class AdminService(
             failedRequests = failedRequests.get(),
             queueSize = queue.size(),
             activeNodes = nodeStatuses.count { it.status == "online" },
-            totalNodes = nodeStatuses.size
+            totalNodes = nodeStatuses.size,
+            loadBalancerNodeMetrics = loadBalancingMetrics
         )
     }
 

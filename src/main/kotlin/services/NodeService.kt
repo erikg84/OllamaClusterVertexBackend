@@ -14,7 +14,7 @@ private val logger = KotlinLogging.logger {}
 /**
  * Service for managing LLM nodes
  */
-class NodeService(vertx: Vertx, private val nodes: List<Node>) {
+class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogService) {
 
     private val webClient = WebClient.create(vertx, WebClientOptions()
         .setConnectTimeout(5000)
@@ -289,5 +289,88 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>) {
             logger.error(e) { "Failed to get logs for node: ${node.name}" }
             Future.failedFuture(e)
         }
+    }
+
+    /**
+     * Gets the best node for a specific model based on node capabilities and load
+     *
+     * @param modelId The ID of the model
+     * @return The name of the best node, or null if no suitable node is found
+     */
+    suspend fun getBestNodeForModel(modelId: String): String? {
+        logger.info { "Finding best node for model: $modelId" }
+
+        // Get nodes that have this model
+        val nodesWithModel = mutableListOf<Node>()
+        val nodeStatuses = getAllNodesStatus().coAwait()
+
+        for (status in nodeStatuses) {
+            if (status.status != "online") continue
+
+            try {
+                val models = getNodeModels(status.node.name).coAwait()
+                if (models.any { it.id == modelId }) {
+                    nodesWithModel.add(status.node)
+                }
+            } catch (e: Exception) {
+                logger.warn { "Failed to check models on node ${status.node.name}: ${e.message}" }
+            }
+        }
+
+        if (nodesWithModel.isEmpty()) {
+            logger.warn { "No nodes found with model: $modelId" }
+            return null
+        }
+
+        // First, check if there are GPU nodes available for this model
+        val gpuNodes = nodesWithModel.filter { it.type == "gpu" }
+        if (gpuNodes.isNotEmpty()) {
+            // For now, just return the first GPU node
+            // This will be enhanced with load balancing later
+            return gpuNodes[0].name
+        }
+
+        // If no GPU nodes, use a CPU node
+        return nodesWithModel[0].name
+    }
+
+    /**
+     * Gets node load information for all nodes
+     *
+     * @return Map of node name to current load
+     */
+    suspend fun getNodeLoads(): Map<String, Double> {
+        val nodeLoads = mutableMapOf<String, Double>()
+        val nodeStatuses = getAllNodesStatus().coAwait()
+
+        for (status in nodeStatuses) {
+            if (status.status != "online") continue
+
+            try {
+                // Get queue status for the node
+                val response = webClient.get(status.node.port, status.node.host, "/queue-status")
+                    .timeout(5000)
+                    .send()
+                    .coAwait()
+
+                if (response.statusCode() == 200) {
+                    val queueInfo = response.bodyAsJsonObject()
+                    val queueSize = queueInfo.getInteger("size", 0)
+                    val queuePending = queueInfo.getInteger("pending", 0)
+
+                    // Calculate load as a combination of queue size and pending tasks
+                    // We'll use a simple formula: load = pending + (size / 2)
+                    // This prioritizes nodes that are currently processing fewer requests
+                    val load = queuePending + (queueSize / 2.0)
+                    nodeLoads[status.node.name] = load
+                }
+            } catch (e: Exception) {
+                logger.warn { "Failed to get queue status for node ${status.node.name}: ${e.message}" }
+                // If we can't get queue status, assume high load
+                nodeLoads[status.node.name] = Double.MAX_VALUE
+            }
+        }
+
+        return nodeLoads
     }
 }
