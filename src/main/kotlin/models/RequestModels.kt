@@ -1,6 +1,7 @@
 package com.dallaslabs.models
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import io.vertx.core.json.JsonObject
 
 /**
  * Represents a request to generate text
@@ -9,7 +10,8 @@ data class GenerateRequest(
     val model: String = "",  // Add default values
     val prompt: String = "",
     val node: String = "",   // Add the node parameter that's in your JSON
-    val stream: Boolean = false
+    val stream: Boolean = false,
+    val options: JsonObject? = null
 )
 
 /**

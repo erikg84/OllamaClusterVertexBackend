@@ -45,6 +45,7 @@ class MainVerticle : CoroutineVerticle() {
         val mongoConfig = JsonObject()
             .put("connection_string", "mongodb://192.168.68.145:27017/logs")
             .put("db_name", "logs")
+
         val mongoClient = MongoClient.createShared(vertx, mongoConfig)
         val logService = LogService(vertx, mongoClient)
         val performanceTrackerService = PerformanceTrackerService(vertx, logService)
@@ -57,11 +58,63 @@ class MainVerticle : CoroutineVerticle() {
         val logViewerHandler = LogViewerHandler(vertx, logService, nodeService, logService)
         val healthHandler = HealthHandler(logService)
         val nodeHandler = NodeHandler(vertx, nodeService, logService)
-        val generateHandler = GenerateHandler(vertx, queue, modelRegistryService, loadBalancerService, nodes, performanceTrackerService, logService)
+        val taskDecompositionService = TaskDecompositionService(vertx, modelRegistryService, logService)
+        val taskDecompositionHandler = TaskDecompositionHandler(vertx, taskDecompositionService, logService)
         val chatHandler = ChatHandler(vertx, queue, modelRegistryService, nodeService, nodes, performanceTrackerService, loadBalancerService, logService)
         val queueHandler = QueueHandler(queue, logService)
         val clusterHandler = ClusterHandler(vertx, clusterService, logService)
         val adminHandler = AdminHandler(vertx, adminService, loadBalancerService, performanceTrackerService, logService)
+
+        val performanceOptimizationService = PerformanceOptimizationService(
+            vertx,
+            modelRegistryService,
+            nodeService,
+            loadBalancerService,
+            nodes,
+            logService
+        )
+        val performanceOptimizationHandler = PerformanceOptimizationHandler(
+            vertx,
+            performanceOptimizationService,
+            logService
+        )
+
+        val generateHandler = GenerateHandler(
+            vertx,
+            queue,
+            modelRegistryService,
+            loadBalancerService,
+            nodes,
+            performanceTrackerService,
+            logService,
+            taskDecompositionService,
+            performanceOptimizationService
+        )
+        val agentService = AgentService(
+            vertx,
+            modelRegistryService,
+            loadBalancerService,
+            taskDecompositionService,
+            performanceTrackerService,
+            logService
+        )
+        val agentHandler = AgentHandler(vertx, agentService, logService)
+        val orchestrationPatternService = OrchestrationPatternService(
+            vertx,
+            modelRegistryService,
+            loadBalancerService,
+            nodeService,
+            nodes,
+            agentService,
+            taskDecompositionService,
+            performanceTrackerService,
+            logService
+        )
+        val orchestrationPatternHandler = OrchestrationPatternHandler(
+            vertx,
+            orchestrationPatternService,
+            logService
+        )
 
         val router = Router.router(vertx)
 
@@ -111,6 +164,30 @@ class MainVerticle : CoroutineVerticle() {
         router.get("/api/cluster/metrics").handler { clusterHandler.getClusterMetrics(it) }
         router.post("/api/cluster/reset-stats").handler { clusterHandler.resetClusterStats(it) }
         router.get("/api/cluster/logs").handler { clusterHandler.getClusterLogs(it) }
+
+        router.post("/api/workflow/decompose/chat").handler { taskDecompositionHandler.decomposeChatRequest(it) }
+        router.post("/api/workflow/decompose/generate").handler { taskDecompositionHandler.decomposeGenerateRequest(it) }
+        router.get("/api/workflow/:id").handler { taskDecompositionHandler.getWorkflow(it) }
+        router.get("/api/workflow/:id/next").handler { taskDecompositionHandler.getNextTasks(it) }
+        router.put("/api/workflow/:workflowId/task/:taskId").handler { taskDecompositionHandler.updateTaskStatus(it) }
+        router.get("/api/workflow/:id/result").handler { taskDecompositionHandler.getFinalResult(it) }
+        router.post("/api/workflow/cleanup").handler { taskDecompositionHandler.cleanupWorkflows(it) }
+
+        router.post("/api/agents/conversations").handler { agentHandler.createConversation(it) }
+        router.get("/api/agents/conversations/:id").handler { agentHandler.getConversation(it) }
+        router.post("/api/agents/conversations/:id/messages").handler { agentHandler.addMessage(it) }
+        router.post("/api/agents/cleanup").handler { agentHandler.cleanupConversations(it) }
+
+        router.post("/api/patterns/ensemble").handler { orchestrationPatternHandler.executeModelEnsemble(it) }
+        router.post("/api/patterns/debate").handler { orchestrationPatternHandler.executeDebatePattern(it) }
+        router.post("/api/patterns/maestro").handler { orchestrationPatternHandler.executeMAESTROWorkflow(it) }
+        router.get("/api/patterns/execution/:id").handler { orchestrationPatternHandler.getExecutionStatus(it) }
+        router.post("/api/patterns/cleanup").handler { orchestrationPatternHandler.cleanupExecutions(it) }
+
+        router.post("/api/performance/prewarm").handler { performanceOptimizationHandler.preWarmModel(it) }
+        router.get("/api/performance/parameters/:model/:taskType").handler { performanceOptimizationHandler.getOptimizedParameters(it) }
+        router.get("/api/performance/cache/stats").handler { performanceOptimizationHandler.getCacheStats(it) }
+        router.get("/api/performance/batch/stats").handler { performanceOptimizationHandler.getBatchQueueStats(it) }
 
         val staticHandler = StaticHandler.create()
             .setWebRoot("webroot")

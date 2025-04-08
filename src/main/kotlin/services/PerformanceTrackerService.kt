@@ -25,7 +25,7 @@ class PerformanceTrackerService(
     private val processingTimePerModel = ConcurrentHashMap<String, AtomicLong>()
     private val maxConcurrentPerNode = ConcurrentHashMap<String, AtomicLong>()
     private val currentConcurrentPerNode = ConcurrentHashMap<String, AtomicLong>()
-
+    private val requestStartTimes = ConcurrentHashMap<String, Long>()
     private val MAX_SPEED_SAMPLES = 50
     private var lastSnapshotTime = Instant.now().epochSecond
     private val weeklySnapshots = mutableListOf<PerformanceSnapshot>()
@@ -135,6 +135,8 @@ class PerformanceTrackerService(
             currentMax = maxConcurrent.get()
         }
 
+        requestStartTimes[nodeName] = System.currentTimeMillis()
+
         launch {
             logService.log("debug", "Request started", mapOf(
                 "node" to nodeName,
@@ -160,6 +162,10 @@ class PerformanceTrackerService(
 
     fun getMaxConcurrentRequests(nodeName: String): Long {
         return maxConcurrentPerNode[nodeName]?.get() ?: 0
+    }
+
+    fun getRequestStartTime(nodeName: String): Long {
+        return requestStartTimes[nodeName] ?: 0L
     }
 
     fun getPerformanceMetrics(): Map<String, Any> {
