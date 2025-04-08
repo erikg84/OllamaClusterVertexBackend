@@ -7,6 +7,9 @@ import io.vertx.core.json.JsonObject
 import io.vertx.ext.web.client.WebClient
 import io.vertx.ext.web.client.WebClientOptions
 import io.vertx.kotlin.coroutines.coAwait
+import io.vertx.kotlin.coroutines.dispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import mu.KotlinLogging
 
 private val logger = KotlinLogging.logger {}
@@ -14,7 +17,11 @@ private val logger = KotlinLogging.logger {}
 /**
  * Service for managing LLM nodes
  */
-class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogService) {
+class NodeService(
+    vertx: Vertx,
+    private val nodes: List<Node>,
+    private val logService: LogService
+): CoroutineScope by CoroutineScope(vertx.dispatcher()) {
 
     private val webClient = WebClient.create(vertx, WebClientOptions()
         .setConnectTimeout(5000)
@@ -32,7 +39,10 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
             ?: return Future.failedFuture("Node $nodeName not found")
 
         logger.info { "Getting models for node: ${node.name}" }
-
+        logService.log("info", "Retrieving node models", mapOf(
+            "nodeName" to node.name,
+            "nodeHost" to node.host
+        ))
         return try {
             val response = webClient.get(node.port, node.host, "/models")
                 .timeout(5000)
@@ -52,14 +62,17 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
                             quantization = modelJson.getString("quantization", "unknown")
                         )
                     }
+                    logService.log("info", "Successfully retrieved models", mapOf(
+                        "nodeName" to node.name,
+                        "modelCount" to models.size
+                    ))
                     Future.succeededFuture(models)
                 } catch (e: Exception) {
                     // If that fails, try to parse as an object with a models field
                     try {
                         val jsonObject = response.bodyAsJsonObject()
-                        if (jsonObject.containsKey("models")) {
-                            val modelsArray = jsonObject.getJsonArray("models")
-                            val models = modelsArray.map { json ->
+                        val models = if (jsonObject.containsKey("models")) {
+                            jsonObject.getJsonArray("models").map { json ->
                                 val modelJson = json as JsonObject
                                 ModelInfo(
                                     id = modelJson.getString("id", "unknown"),
@@ -69,22 +82,35 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
                                     quantization = modelJson.getString("quantization", "unknown")
                                 )
                             }
-                            Future.succeededFuture(models)
                         } else {
-                            // If there's no models field, return an empty list
-                            Future.succeededFuture(emptyList())
+                            emptyList()
                         }
+                        logService.log("info", "Successfully parsed models from alternate format", mapOf(
+                            "nodeName" to node.name,
+                            "modelCount" to models.size
+                        ))
+                        Future.succeededFuture(models)
                     } catch (e2: Exception) {
-                        // If both parsing attempts fail, log and return the error
+                        logService.logError("Failed to parse models response", e2, mapOf(
+                            "nodeName" to node.name,
+                            "responseBody" to response.bodyAsString()
+                        ))
                         logger.error(e2) { "Failed to parse models response for node: ${node.name}" }
                         Future.failedFuture("Failed to parse models response: ${e2.message}")
                     }
                 }
             } else {
+                logService.log("warn", "Failed to get models", mapOf(
+                    "nodeName" to node.name,
+                    "statusCode" to response.statusCode()
+                ))
                 Future.failedFuture("Failed to get models with status code: ${response.statusCode()}")
             }
         } catch (e: Exception) {
             logger.error(e) { "Failed to get models for node: ${node.name}" }
+            logService.logError("Failed to get models for node", e, mapOf(
+                "nodeName" to node.name
+            ))
             Future.failedFuture(e)
         }
     }
@@ -92,7 +118,14 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
     /**
      * Returns all nodes
      */
-    fun getNodes(): List<Node> = nodes
+    fun getNodes(): List<Node> {
+        launch {
+            logService.log("debug", "Retrieved all nodes", mapOf(
+                "nodeCount" to nodes.size
+            ))
+        }
+        return nodes
+    }
 
     /**
      * Gets the status of a node
@@ -105,31 +138,42 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
             ?: return Future.failedFuture("Node $nodeName not found")
 
         logger.info { "Checking status of node: ${node.name}" }
-
+        logService.log("info", "Checking node status", mapOf(
+            "nodeName" to node.name,
+            "nodeHost" to node.host
+        ))
         return try {
             val response = webClient.get(node.port, node.host, "/health")
                 .timeout(5000)
                 .send()
                 .coAwait()
 
-            if (response.statusCode() == 200) {
-                Future.succeededFuture(
-                    NodeStatus(
-                        node = node,
-                        status = "online"
-                    )
+            val status = if (response.statusCode() == 200) {
+                logService.log("info", "Node is online", mapOf(
+                    "nodeName" to node.name
+                ))
+                NodeStatus(
+                    node = node,
+                    status = "online"
                 )
             } else {
-                Future.succeededFuture(
-                    NodeStatus(
-                        node = node,
-                        status = "error",
-                        message = "Health check failed with status code: ${response.statusCode()}"
-                    )
+                logService.log("warn", "Node health check failed", mapOf(
+                    "nodeName" to node.name,
+                    "statusCode" to response.statusCode()
+                ))
+                NodeStatus(
+                    node = node,
+                    status = "error",
+                    message = "Health check failed with status code: ${response.statusCode()}"
                 )
             }
+
+            Future.succeededFuture(status)
         } catch (e: Exception) {
             logger.error(e) { "Failed to check node health: ${node.name}" }
+            logService.logError("Failed to check node health", e, mapOf(
+                "nodeName" to node.name
+            ))
             Future.succeededFuture(
                 NodeStatus(
                     node = node,
@@ -147,6 +191,9 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
      */
     suspend fun getAllNodesStatus(): Future<List<NodeStatus>> {
         logger.info { "Getting status of all nodes" }
+        logService.log("info", "Retrieving status for all nodes", mapOf(
+            "totalNodes" to nodes.size
+        ))
 
         val statuses = mutableListOf<NodeStatus>()
 
@@ -156,10 +203,15 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
                 statuses.add(status)
             } catch (e: Exception) {
                 logger.error(e) { "Failed to get status of node: ${node.name}" }
-                // Continue with other nodes
+                logService.logError("Failed to get status of node", e, mapOf(
+                    "nodeName" to node.name
+                ))
             }
         }
-
+        logService.log("info", "Completed node status retrieval", mapOf(
+            "onlineNodes" to statuses.count { it.status == "online" },
+            "totalNodes" to statuses.size
+        ))
         return Future.succeededFuture(statuses)
     }
 
@@ -173,7 +225,8 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
         val node = nodes.find { it.name == nodeName }
             ?: return Future.failedFuture("Node $nodeName not found")
 
-        logger.info { "Getting metrics for node: ${node.name}" }
+        logger.info { "Retrieving metrics for node: ${node.name}" }
+        logService.log("info", "Retrieving node metrics", mapOf("nodeName" to node.name))
 
         return try {
             val response = webClient.get(node.port, node.host, "/admin/metrics")
@@ -183,12 +236,15 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
 
             if (response.statusCode() == 200) {
                 val metrics = response.bodyAsJson(NodeMetrics::class.java)
+                logService.log("info", "Successfully retrieved node metrics", mapOf("nodeName" to node.name))
                 Future.succeededFuture(metrics)
             } else {
-                Future.failedFuture("Failed to get metrics with status code: ${response.statusCode()}")
+                logService.log("warn", "Failed to retrieve metrics", mapOf("nodeName" to node.name, "statusCode" to response.statusCode()))
+                Future.failedFuture("Metrics retrieval failed: ${response.statusCode()}")
             }
         } catch (e: Exception) {
-            logger.error(e) { "Failed to get metrics for node: ${node.name}" }
+            logger.error(e) { "Metrics retrieval failed for node: ${node.name}" }
+            logService.logError("Exception retrieving node metrics", e, mapOf("nodeName" to node.name))
             Future.failedFuture(e)
         }
     }
@@ -204,6 +260,7 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
             ?: return Future.failedFuture("Node $nodeName not found")
 
         logger.info { "Getting system info for node: ${node.name}" }
+        logService.log("info", "Retrieving system info", mapOf("nodeName" to node.name))
 
         return try {
             val response = webClient.get(node.port, node.host, "/admin/system")
@@ -213,12 +270,15 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
 
             if (response.statusCode() == 200) {
                 val sysInfo = response.bodyAsJson(SystemInfo::class.java)
+                logService.log("info", "Successfully retrieved system info", mapOf("nodeName" to node.name))
                 Future.succeededFuture(sysInfo)
             } else {
-                Future.failedFuture("Failed to get system info with status code: ${response.statusCode()}")
+                logService.log("warn", "Failed to retrieve system info", mapOf("nodeName" to node.name, "statusCode" to response.statusCode()))
+                Future.failedFuture("System info retrieval failed: ${response.statusCode()}")
             }
         } catch (e: Exception) {
-            logger.error(e) { "Failed to get system info for node: ${node.name}" }
+            logger.error(e) { "System info retrieval failed for node: ${node.name}" }
+            logService.logError("Exception retrieving system info", e, mapOf("nodeName" to node.name))
             Future.failedFuture(e)
         }
     }
@@ -234,6 +294,7 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
             ?: return Future.failedFuture("Node $nodeName not found")
 
         logger.info { "Resetting stats for node: ${node.name}" }
+        logService.log("info", "Resetting node stats", mapOf("nodeName" to node.name))
 
         return try {
             val response = webClient.post(node.port, node.host, "/admin/reset-stats")
@@ -242,12 +303,15 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
                 .coAwait()
 
             if (response.statusCode() == 200) {
+                logService.log("info", "Successfully reset node stats", mapOf("nodeName" to node.name))
                 Future.succeededFuture()
             } else {
-                Future.failedFuture("Failed to reset stats with status code: ${response.statusCode()}")
+                logService.log("warn", "Failed to reset stats", mapOf("nodeName" to node.name, "statusCode" to response.statusCode()))
+                Future.failedFuture("Reset stats failed: ${response.statusCode()}")
             }
         } catch (e: Exception) {
-            logger.error(e) { "Failed to reset stats for node: ${node.name}" }
+            logger.error(e) { "Reset stats failed for node: ${node.name}" }
+            logService.logError("Exception resetting node stats", e, mapOf("nodeName" to node.name))
             Future.failedFuture(e)
         }
     }
@@ -298,7 +362,9 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
      * @return The name of the best node, or null if no suitable node is found
      */
     suspend fun getBestNodeForModel(modelId: String): String? {
-        logger.info { "Finding best node for model: $modelId" }
+        logService.log("info", "Finding best node for model", mapOf(
+            "modelId" to modelId
+        ))
 
         // Get nodes that have this model
         val nodesWithModel = mutableListOf<Node>()
@@ -313,26 +379,39 @@ class NodeService(vertx: Vertx, private val nodes: List<Node>, logService: LogSe
                     nodesWithModel.add(status.node)
                 }
             } catch (e: Exception) {
-                logger.warn { "Failed to check models on node ${status.node.name}: ${e.message}" }
+                logService.log("warn", "Failed to check models on node", mapOf(
+                    "nodeName" to status.node.name,
+                    "error" to e.message.orEmpty()
+                ))
             }
         }
 
         if (nodesWithModel.isEmpty()) {
-            logger.warn { "No nodes found with model: $modelId" }
+            logService.log("warn", "No nodes found with model", mapOf(
+                "modelId" to modelId
+            ))
             return null
         }
 
         // First, check if there are GPU nodes available for this model
         val gpuNodes = nodesWithModel.filter { it.type == "gpu" }
         if (gpuNodes.isNotEmpty()) {
-            // For now, just return the first GPU node
-            // This will be enhanced with load balancing later
-            return gpuNodes[0].name
+            val selectedNode = gpuNodes[0]
+            logService.log("info", "Selected GPU node for model", mapOf(
+                "modelId" to modelId,
+                "nodeName" to selectedNode.name
+            ))
+            return selectedNode.name
         }
 
-        // If no GPU nodes, use a CPU node
-        return nodesWithModel[0].name
+        val selectedNode = nodesWithModel[0]
+        logService.log("info", "Selected CPU node for model", mapOf(
+            "modelId" to modelId,
+            "nodeName" to selectedNode.name
+        ))
+        return selectedNode.name
     }
+
 
     /**
      * Gets node load information for all nodes

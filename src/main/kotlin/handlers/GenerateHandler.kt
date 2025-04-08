@@ -23,9 +23,6 @@ import kotlin.coroutines.CoroutineContext
 
 private val logger = KotlinLogging.logger {}
 
-/**
- * Handler for text generation requests
- */
 class GenerateHandler(
     private val vertx: Vertx,
     private val queue: Queue,
@@ -33,11 +30,8 @@ class GenerateHandler(
     private val loadBalancer: LoadBalancerService,
     private val nodes: List<Node>,
     private val performanceTracker: PerformanceTrackerService,
-    logService: LogService
-) : CoroutineScope {
-
-    override val coroutineContext: CoroutineContext
-        get() = vertx.dispatcher()
+    private val logService: LogService
+) : CoroutineScope by CoroutineScope(vertx.dispatcher()) {
 
     private val webClient = WebClient.create(
         vertx, WebClientOptions()
@@ -45,16 +39,12 @@ class GenerateHandler(
             .setIdleTimeout(60000)
     )
 
-    /**
-     * Handles generation requests
-     */
     fun handle(ctx: RoutingContext) {
         val requestId = ctx.get<String>("requestId") ?: "unknown"
 
         try {
             val req = ctx.body().asJsonObject().mapTo(GenerateRequest::class.java)
 
-            // Validate request
             if (req.model.isBlank()) {
                 respondWithError(ctx, 400, "Model is required")
                 return
@@ -75,8 +65,14 @@ class GenerateHandler(
                         "promptLength=${req.prompt.length}, stream=${req.stream} (requestId: $requestId)"
             }
 
-            // Process the request
             launch {
+                logService.log("info", "Generate request received", mapOf(
+                    "model" to req.model,
+                    "promptLength" to req.prompt.length,
+                    "stream" to req.stream,
+                    "requestId" to requestId
+                ))
+
                 try {
                     val startTime = System.currentTimeMillis()
                     val result = queue.add<JsonObject> {
@@ -85,7 +81,6 @@ class GenerateHandler(
                             throw IllegalArgumentException("Model ${req.model} is not available on any node")
                         }
 
-                        // Get the best node for this model using the load balancer
                         val nodeName = loadBalancer.selectBestNodeForModel(req.model)
 
                         if (nodeName == null) {
@@ -100,12 +95,17 @@ class GenerateHandler(
                                     "(requestId: $requestId)"
                         }
 
+                        logService.log("info", "Selected node for generate request", mapOf(
+                            "modelId" to req.model,
+                            "nodeName" to node.name,
+                            "requestId" to requestId
+                        ))
+
                         val requestWithNode = req.copy(node = node.name)
 
                         performanceTracker.recordRequestStart(node.name)
 
                         try {
-                            // Forward request to the selected node
                             val response = webClient.post(node.port, node.host, "/generate")
                                 .putHeader("Content-Type", "application/json")
                                 .putHeader("X-Request-ID", requestId)
@@ -117,16 +117,14 @@ class GenerateHandler(
                                 throw RuntimeException("Node ${node.name} returned status ${response.statusCode()}")
                             }
 
-                            // Record success
                             val endTime = System.currentTimeMillis()
                             val processingTime = endTime - startTime
-                            loadBalancer.recordSuccess(node.name, endTime - startTime)
+                            loadBalancer.recordSuccess(node.name, processingTime)
 
                             val responseJson = response.bodyAsJsonObject()
                             val promptTokens = responseJson.getInteger("prompt_eval_count", 0)
                             val completionTokens = responseJson.getInteger("eval_count", 0)
 
-                            // Record performance metrics
                             performanceTracker.recordRequest(
                                 nodeName = node.name,
                                 modelId = req.model,
@@ -135,10 +133,21 @@ class GenerateHandler(
                                 processingTimeMs = processingTime
                             )
 
+                            logService.log("info", "Request completed", mapOf(
+                                "nodeName" to node.name,
+                                "requestId" to requestId,
+                                "processingTimeMs" to processingTime,
+                                "promptTokens" to promptTokens,
+                                "completionTokens" to completionTokens
+                            ))
+
                             response.bodyAsJsonObject()
                         } catch (e: Exception) {
-                            // Record failure
                             loadBalancer.recordFailure(node.name)
+                            logService.logError("Generation request failed during forwarding", e, mapOf(
+                                "nodeName" to node.name,
+                                "requestId" to requestId
+                            ))
                             throw e
                         }
                     }.coAwait()
@@ -150,12 +159,19 @@ class GenerateHandler(
 
                 } catch (e: Exception) {
                     logger.error(e) { "Failed to process generation request (requestId: $requestId)" }
+                    logService.logError("Failed to process generation request", e, mapOf(
+                        "requestId" to requestId,
+                        "modelId" to req.model
+                    ))
                     respondWithError(ctx, 500, e.message ?: "Unknown error")
                 }
             }
 
         } catch (e: Exception) {
             logger.error(e) { "Failed to parse request (requestId: $requestId)" }
+            launch {
+                logService.logError("Failed to parse generation request", e, mapOf("requestId" to requestId))
+            }
             respondWithError(ctx, 400, "Invalid request: ${e.message}")
         }
     }

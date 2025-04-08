@@ -12,48 +12,35 @@ import kotlin.coroutines.CoroutineContext
 
 private val logger = KotlinLogging.logger {}
 
-/**
- * Registry for models across the cluster
- * Maintains information about which models are available on which nodes
- */
 class ModelRegistryService(
     private val vertx: Vertx,
     private val nodeService: NodeService,
     private val logService: LogService
-) : CoroutineScope {
+) : CoroutineScope by CoroutineScope(vertx.dispatcher()) {
 
     override val coroutineContext: CoroutineContext
         get() = vertx.dispatcher()
 
-    // Map from modelId to a map of nodeNames to ModelInfo
     private val modelRegistry = ConcurrentHashMap<String, ConcurrentHashMap<String, ModelInfo>>()
-
-    // Store model sizes for selection logic
     private val modelSizes = ConcurrentHashMap<String, Long>()
-
-    // Last refresh timestamp
     private var lastRefresh: Long = 0
 
     init {
-        // Schedule periodic refresh
-        vertx.setPeriodic(60000) { // Every minute
+        vertx.setPeriodic(60000) {
             launch(coroutineContext) {
                 refreshRegistry()
             }
         }
     }
 
-    /**
-     * Refreshes the model registry by querying all nodes
-     */
     suspend fun refreshRegistry() {
-       logger.info { "Refreshing model registry" }
+        logger.info { "Refreshing model registry" }
+        logService.log("info", "Refreshing model registry", emptyMap())
 
         try {
             val nodeStatuses = nodeService.getAllNodesStatus().coAwait()
             val onlineNodes = nodeStatuses.filter { it.status == "online" }.map { it.node }
 
-            // Create a new registry to replace the old one
             val newRegistry = ConcurrentHashMap<String, ConcurrentHashMap<String, ModelInfo>>()
             val newModelSizes = ConcurrentHashMap<String, Long>()
 
@@ -62,10 +49,8 @@ class ModelRegistryService(
                     val nodeModels = nodeService.getNodeModels(node.name).coAwait()
 
                     for (model in nodeModels) {
-                        // Update model sizes map
                         newModelSizes[model.id] = model.size
 
-                        // Add model to registry
                         val nodesForModel = newRegistry.computeIfAbsent(model.id) {
                             ConcurrentHashMap<String, ModelInfo>()
                         }
@@ -73,11 +58,10 @@ class ModelRegistryService(
                     }
                 } catch (e: Exception) {
                     logger.error(e) { "Failed to get models from node: ${node.name}" }
-                    // Continue with other nodes
+                    logService.logError("Failed to get models from node", e, mapOf("nodeName" to node.name))
                 }
             }
 
-            // Replace the registry with the new one
             modelRegistry.clear()
             modelRegistry.putAll(newRegistry)
 
@@ -86,52 +70,59 @@ class ModelRegistryService(
 
             lastRefresh = System.currentTimeMillis()
             logger.info { "Model registry refreshed. Found ${modelRegistry.size} models across ${onlineNodes.size} nodes." }
+            logService.log("info", "Model registry refreshed", mapOf(
+                "modelCount" to modelRegistry.size,
+                "nodeCount" to onlineNodes.size
+            ))
         } catch (e: Exception) {
             logger.error(e) { "Failed to refresh model registry" }
+            logService.logError("Failed to refresh model registry", e)
         }
     }
 
-    /**
-     * Gets all available models
-     */
     fun getAllModels(): List<ModelInfo> {
+        launch {
+            logService.log("debug", "Retrieving all models", mapOf("modelCount" to modelRegistry.size))
+        }
         return modelRegistry.flatMap { (_, nodeMap) ->
             nodeMap.values
         }
     }
 
-    /**
-     * Gets all nodes that have a specific model
-     */
     fun getNodesForModel(modelId: String): List<String> {
-        return modelRegistry[modelId]?.keys?.toList() ?: emptyList()
+        val nodes = modelRegistry[modelId]?.keys?.toList() ?: emptyList()
+        launch {
+            logService.log("debug", "Retrieved nodes for model", mapOf("modelId" to modelId, "nodeCount" to nodes.size))
+        }
+        return nodes
     }
 
-    /**
-     * Gets the model info for a specific model on a specific node
-     */
     fun getModelInfo(modelId: String, nodeName: String): ModelInfo? {
-        return modelRegistry[modelId]?.get(nodeName)
+        val modelInfo = modelRegistry[modelId]?.get(nodeName)
+        launch {
+            logService.log("debug", "Retrieved model info", mapOf("modelId" to modelId, "nodeName" to nodeName, "found" to (modelInfo != null)))
+        }
+        return modelInfo
     }
 
-    /**
-     * Gets the size of a model
-     */
     fun getModelSize(modelId: String): Long {
-        return modelSizes[modelId] ?: 0
+        val size = modelSizes[modelId] ?: 0
+        launch {
+            logService.log("debug", "Retrieved model size", mapOf("modelId" to modelId, "size" to size))
+        }
+        return size
     }
 
-    /**
-     * Checks if a model is available anywhere in the cluster
-     */
     fun isModelAvailable(modelId: String): Boolean {
-        return modelRegistry.containsKey(modelId) && modelRegistry[modelId]?.isNotEmpty() == true
+        val available = modelRegistry.containsKey(modelId) && modelRegistry[modelId]?.isNotEmpty() == true
+        launch {
+            logService.log("debug", "Checked model availability", mapOf("modelId" to modelId, "available" to available))
+        }
+        return available
     }
 
-    /**
-     * Forces an immediate refresh of the registry
-     */
     suspend fun forceRefresh() {
+        logService.log("info", "Force refreshing model registry", emptyMap())
         refreshRegistry()
     }
 }

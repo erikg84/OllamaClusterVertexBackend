@@ -4,18 +4,28 @@ import com.dallaslabs.services.LogService
 import io.vertx.core.Future
 import io.vertx.core.Promise
 import io.vertx.core.Vertx
-import kotlinx.coroutines.runBlocking
+import io.vertx.kotlin.coroutines.dispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import mu.KotlinLogging
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
 
 private val logger = KotlinLogging.logger {}
 
 /**
- * A queue for processing tasks with concurrency control
+ * A queue for processing tasks with concurrency control and logging
  */
-class Queue(private val vertx: Vertx, private val concurrency: Int, logService: LogService) {
+class Queue(
+    private val vertx: Vertx,
+    private val concurrency: Int,
+    private val logService: LogService
+): CoroutineScope {
 
+    override val coroutineContext: CoroutineContext
+        get() = vertx.dispatcher()
+    
     private val taskQueue = ConcurrentLinkedQueue<Task<*>>()
     private val activeCount = AtomicInteger(0)
     private val size = AtomicInteger(0)
@@ -23,6 +33,9 @@ class Queue(private val vertx: Vertx, private val concurrency: Int, logService: 
 
     init {
         logger.info { "Initializing queue with concurrency: $concurrency" }
+        launch {
+            logService.logSystemEvent("Queue initialized with concurrency: $concurrency")
+        }
     }
 
     /**
@@ -33,6 +46,7 @@ class Queue(private val vertx: Vertx, private val concurrency: Int, logService: 
      */
     fun <T> add(task: suspend () -> T): Future<T> {
         if (closed) {
+            logger.warn { "Attempt to add task to closed queue" }
             return Future.failedFuture("Queue is closed")
         }
 
@@ -41,6 +55,14 @@ class Queue(private val vertx: Vertx, private val concurrency: Int, logService: 
 
         taskQueue.add(queueTask)
         size.incrementAndGet()
+
+        // Log task addition
+        launch {
+            logService.log("info", "Task added to queue", mapOf(
+                "queueSize" to size.get(),
+                "activeCount" to activeCount.get()
+            ))
+        }
 
         // Try to process next task
         processNext()
@@ -61,21 +83,21 @@ class Queue(private val vertx: Vertx, private val concurrency: Int, logService: 
     /**
      * Checks if the queue is paused
      */
-    fun isPaused(): Boolean {
-        return paused
-    }
+    fun isPaused(): Boolean = paused
 
     /**
      * Closes the queue
      */
     fun close() {
         logger.info { "Closing queue" }
+        launch {
+            logService.logSystemEvent("Queue closed", "queue")
+        }
         closed = true
     }
 
     /**
-     * Updates processNext method to check for paused state
-     * This should replace your existing processNext() implementation
+     * Processes the next task in the queue
      */
     private fun processNext() {
         // Check if queue is paused
@@ -97,17 +119,37 @@ class Queue(private val vertx: Vertx, private val concurrency: Int, logService: 
         // Execute the task
         vertx.executeBlocking<Any>({ promise ->
             try {
-                runBlocking {
+                launch {
+                    logService.log("debug", "Processing task", mapOf(
+                        "activeCount" to activeCount.get(),
+                        "queueSize" to size.get()
+                    ))
+
                     val result = task.execute()
                     promise.complete(result)
                 }
             } catch (e: Exception) {
+                // Log the error
+                launch {
+                    logService.logError("Task execution failed", e, mapOf(
+                        "activeCount" to activeCount.get(),
+                        "queueSize" to size.get()
+                    ))
+                }
                 promise.fail(e)
             }
         }, { res ->
             // Task completed, update counters
             activeCount.decrementAndGet()
             size.decrementAndGet()
+
+            // Log task completion
+            launch {
+                logService.log("debug", "Task completed", mapOf(
+                    "activeCount" to activeCount.get(),
+                    "queueSize" to size.get()
+                ))
+            }
 
             // Try to process next task
             processNext()
@@ -125,6 +167,9 @@ class Queue(private val vertx: Vertx, private val concurrency: Int, logService: 
     fun pause() {
         if (!paused) {
             logger.info { "Pausing queue" }
+            launch {
+                logService.logSystemEvent("Queue paused", "queue")
+            }
             paused = true
         }
     }
@@ -135,6 +180,9 @@ class Queue(private val vertx: Vertx, private val concurrency: Int, logService: 
     fun resume() {
         if (paused) {
             logger.info { "Resuming queue" }
+            launch {
+                logService.logSystemEvent("Queue resumed", "queue")
+            }
             paused = false
 
             // Try to process tasks that might have been added while paused
@@ -142,6 +190,9 @@ class Queue(private val vertx: Vertx, private val concurrency: Int, logService: 
         }
     }
 
+    /**
+     * Internal task wrapper for execution and promise management
+     */
     private class Task<T>(
         private val task: suspend () -> T,
         private val promise: Promise<T>

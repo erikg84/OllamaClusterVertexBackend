@@ -20,9 +20,6 @@ import kotlin.coroutines.CoroutineContext
 
 private val logger = KotlinLogging.logger {}
 
-/**
- * Handler for chat requests
- */
 class ChatHandler(
     private val vertx: Vertx,
     private val queue: Queue,
@@ -31,7 +28,7 @@ class ChatHandler(
     private val nodes: List<Node>,
     private val performanceTracker: PerformanceTrackerService,
     private val loadBalancer: LoadBalancerService,
-    logService: LogService
+    private val logService: LogService
 ) : CoroutineScope {
 
     override val coroutineContext: CoroutineContext
@@ -42,16 +39,12 @@ class ChatHandler(
         .setIdleTimeout(60000)
     )
 
-    /**
-     * Handles chat requests
-     */
     fun handle(ctx: RoutingContext) {
         val requestId = ctx.get<String>("requestId") ?: "unknown"
 
         try {
             val req = ctx.body().asJsonObject().mapTo(ChatRequest::class.java)
 
-            // Validate request
             if (req.model.isBlank()) {
                 respondWithError(ctx, 400, "Model is required")
                 return
@@ -72,8 +65,14 @@ class ChatHandler(
                         "messagesCount=${req.messages.size}, stream=${req.stream} (requestId: $requestId)"
             }
 
-            // Process the request
             launch {
+                logService.log("info", "Chat request received", mapOf(
+                    "model" to req.model,
+                    "messagesCount" to req.messages.size,
+                    "stream" to req.stream,
+                    "requestId" to requestId
+                ))
+
                 try {
                     val startTime = System.currentTimeMillis()
                     val result = queue.add<JsonObject> {
@@ -95,12 +94,16 @@ class ChatHandler(
                                     "(requestId: $requestId)"
                         }
 
-                        // Add node name to the request
+                        logService.log("info", "Selected node for chat request", mapOf(
+                            "modelId" to req.model,
+                            "nodeName" to node.name,
+                            "requestId" to requestId
+                        ))
+
                         val requestWithNode = req.copy(node = node.name)
 
                         performanceTracker.recordRequestStart(node.name)
 
-                        // Forward request to the selected node
                         val response = webClient.post(node.port, node.host, "/chat")
                             .putHeader("Content-Type", "application/json")
                             .putHeader("X-Request-ID", requestId)
@@ -108,6 +111,7 @@ class ChatHandler(
                             .coAwait()
 
                         if (response.statusCode() != 200) {
+                            loadBalancer.recordFailure(node.name)
                             throw RuntimeException("Node ${node.name} returned status ${response.statusCode()}")
                         }
 
@@ -128,6 +132,14 @@ class ChatHandler(
                             processingTimeMs = processingTime
                         )
 
+                        logService.log("info", "Chat request completed", mapOf(
+                            "nodeName" to node.name,
+                            "requestId" to requestId,
+                            "processingTimeMs" to processingTime,
+                            "promptTokens" to promptTokens,
+                            "completionTokens" to completionTokens
+                        ))
+
                         response.bodyAsJsonObject()
                     }.coAwait()
 
@@ -138,12 +150,19 @@ class ChatHandler(
 
                 } catch (e: Exception) {
                     logger.error(e) { "Failed to process chat request (requestId: $requestId)" }
+                    logService.logError("Failed to process chat request", e, mapOf(
+                        "requestId" to requestId,
+                        "modelId" to req.model
+                    ))
                     respondWithError(ctx, 500, e.message ?: "Unknown error")
                 }
             }
 
         } catch (e: Exception) {
             logger.error(e) { "Failed to parse request (requestId: $requestId)" }
+            launch {
+                logService.logError("Failed to parse chat request", e, mapOf("requestId" to requestId))
+            }
             respondWithError(ctx, 400, "Invalid request: ${e.message}")
         }
     }

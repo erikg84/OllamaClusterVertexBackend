@@ -3,7 +3,7 @@ server:
   readTimeout: 30
   writeTimeout: 30
   queueSize: 100
-  concurrency: 5
+  concurrency: 20
 
 mongodb:
   uri: "mongodb://192.168.68.145:27017/logs"

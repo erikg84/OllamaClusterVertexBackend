@@ -4,6 +4,9 @@ import com.dallaslabs.models.*
 import com.dallaslabs.utils.Queue
 import io.vertx.core.Vertx
 import io.vertx.kotlin.coroutines.coAwait
+import io.vertx.kotlin.coroutines.dispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import mu.KotlinLogging
 import java.lang.management.ManagementFactory
 import java.time.Instant
@@ -12,16 +15,13 @@ import java.util.concurrent.atomic.AtomicLong
 
 private val logger = KotlinLogging.logger {}
 
-/**
- * Service for admin operations
- */
 class AdminService(
     private val vertx: Vertx,
     private val nodeService: NodeService,
     private val loadBalancer: LoadBalancerService,
     private val queue: Queue,
-    logService: LogService
-) {
+    private val logService: LogService
+) : CoroutineScope by CoroutineScope(vertx.dispatcher()) {
     private val startTime = Instant.now()
 
     private val totalRequests = AtomicLong(0)
@@ -32,13 +32,12 @@ class AdminService(
     init {
         vertx.setPeriodic(60000) {
             logger.debug { "Collecting metrics..." }
-            // This would be expanded in a real implementation
+            launch {
+                logService.log("debug", "Periodic metric collection running", emptyMap())
+            }
         }
     }
 
-    /**
-     * Records a request
-     */
     fun recordRequest(requestId: String, latency: Long, success: Boolean) {
         totalRequests.incrementAndGet()
         if (success) {
@@ -47,13 +46,19 @@ class AdminService(
             failedRequests.incrementAndGet()
         }
         requestLatencies[requestId] = latency
+
+        launch {
+            logService.log("debug", "Request recorded", mapOf(
+                "requestId" to requestId,
+                "latency" to latency,
+                "success" to success
+            ))
+        }
     }
 
-    /**
-     * Gets general metrics
-     */
     suspend fun getMetrics(): Metrics {
         logger.info { "Getting metrics" }
+        launch { logService.log("info", "Fetching cluster metrics", emptyMap()) }
 
         val uptime = Instant.now().epochSecond - startTime.epochSecond
         val nodeStatuses = nodeService.getAllNodesStatus().coAwait()
@@ -62,6 +67,7 @@ class AdminService(
             loadBalancer.getNodeMetrics()
         } catch (e: Exception) {
             logger.error(e) { "Failed to get load balancing metrics" }
+            launch { logService.logError("Failed to get load balancer metrics", e) }
             emptyMap()
         }
 
@@ -77,16 +83,13 @@ class AdminService(
         )
     }
 
-    /**
-     * Gets Prometheus-formatted metrics
-     */
     suspend fun getPrometheusMetrics(): String {
         logger.info { "Getting Prometheus metrics" }
+        launch { logService.log("info", "Fetching Prometheus metrics", emptyMap()) }
 
         val metrics = getMetrics()
         val sb = StringBuilder()
 
-        // Format metrics for Prometheus
         sb.appendLine("# HELP llm_cluster_uptime_seconds Total uptime in seconds")
         sb.appendLine("# TYPE llm_cluster_uptime_seconds counter")
         sb.appendLine("llm_cluster_uptime_seconds ${metrics.uptime}")
@@ -118,13 +121,12 @@ class AdminService(
         return sb.toString()
     }
 
-    /**
-     * Gets request statistics
-     */
     fun getRequestStatistics(): RequestStatistics {
         logger.info { "Getting request statistics" }
+        launch {
+            logService.log("debug", "Retrieving request statistics", emptyMap())
+        }
 
-        // Calculate average latency
         var totalLatency = 0L
         var count = 0
         requestLatencies.values.forEach {
@@ -142,11 +144,9 @@ class AdminService(
         )
     }
 
-    /**
-     * Gets node health information
-     */
     suspend fun getNodeHealth(): NodeHealth {
         logger.info { "Getting node health" }
+        launch { logService.log("info", "Fetching node health info", emptyMap()) }
 
         val nodeStatuses = nodeService.getAllNodesStatus().coAwait()
 
@@ -161,11 +161,11 @@ class AdminService(
         )
     }
 
-    /**
-     * Gets system information
-     */
     fun getSystemInfo(): SystemInfo {
         logger.info { "Getting system information" }
+        launch {
+            logService.log("info", "Fetching system info", emptyMap())
+        }
 
         val runtime = Runtime.getRuntime()
         val mb = 1024 * 1024
@@ -189,15 +189,15 @@ class AdminService(
         )
     }
 
-    /**
-     * Resets statistics
-     */
     fun resetStatistics() {
         logger.info { "Resetting statistics" }
-
         totalRequests.set(0)
         successfulRequests.set(0)
         failedRequests.set(0)
         requestLatencies.clear()
+
+        launch {
+            logService.log("info", "Statistics reset", emptyMap())
+        }
     }
 }

@@ -12,52 +12,25 @@ import kotlin.coroutines.CoroutineContext
 
 private val logger = KotlinLogging.logger {}
 
-/**
- * Service for tracking performance metrics across nodes and models
- */
 class PerformanceTrackerService(
     private val vertx: Vertx,
     private val logService: LogService
-): CoroutineScope {
+) : CoroutineScope by CoroutineScope(vertx.dispatcher()) {
 
-    override val coroutineContext: CoroutineContext
-        get() = vertx.dispatcher()
-
-    // Track total tokens generated per node
     private val tokenCountPerNode = ConcurrentHashMap<String, AtomicLong>()
-
-    // Track total tokens generated per model
     private val tokenCountPerModel = ConcurrentHashMap<String, AtomicLong>()
-
-    // Track average generation speed (tokens/second) per node
     private val tokensPerSecondPerNode = ConcurrentHashMap<String, MutableList<Double>>()
-
-    // Track average generation speed (tokens/second) per model
     private val tokensPerSecondPerModel = ConcurrentHashMap<String, MutableList<Double>>()
-
-    // Track total processing time per node
     private val processingTimePerNode = ConcurrentHashMap<String, AtomicLong>()
-
-    // Track total processing time per model
     private val processingTimePerModel = ConcurrentHashMap<String, AtomicLong>()
-
-    // Track max concurrent requests per node
     private val maxConcurrentPerNode = ConcurrentHashMap<String, AtomicLong>()
-
-    // Track current concurrent requests per node
     private val currentConcurrentPerNode = ConcurrentHashMap<String, AtomicLong>()
 
-    // Maximum items to keep in speed tracking lists
     private val MAX_SPEED_SAMPLES = 50
-
-    // Last snapshot time
     private var lastSnapshotTime = Instant.now().epochSecond
-
-    // Weekly snapshots for historical data
     private val weeklySnapshots = mutableListOf<PerformanceSnapshot>()
 
     init {
-        // Take a snapshot every hour
         vertx.setPeriodic(60 * 60 * 1000) {
             try {
                 takeSnapshot()
@@ -72,7 +45,6 @@ class PerformanceTrackerService(
             }
         }
 
-        // Clean up old snapshots once a day
         vertx.setPeriodic(24 * 60 * 60 * 1000) {
             try {
                 cleanupOldSnapshots()
@@ -88,15 +60,6 @@ class PerformanceTrackerService(
         }
     }
 
-    /**
-     * Records metrics for a completed request
-     *
-     * @param nodeName Name of the node that processed the request
-     * @param modelId ID of the model used
-     * @param promptTokens Number of tokens in the prompt
-     * @param completionTokens Number of tokens generated
-     * @param processingTimeMs Total processing time in milliseconds
-     */
     fun recordRequest(
         nodeName: String,
         modelId: String,
@@ -104,21 +67,18 @@ class PerformanceTrackerService(
         completionTokens: Int,
         processingTimeMs: Long
     ) {
-        // Increment total token counts
         tokenCountPerNode.computeIfAbsent(nodeName) { AtomicLong(0) }
             .addAndGet(completionTokens.toLong())
 
         tokenCountPerModel.computeIfAbsent(modelId) { AtomicLong(0) }
             .addAndGet(completionTokens.toLong())
 
-        // Calculate tokens per second
         val tokensPerSecond = if (processingTimeMs > 0) {
             (completionTokens.toDouble() / processingTimeMs) * 1000.0
         } else {
             0.0
         }
 
-        // Record generation speed
         synchronized(tokensPerSecondPerNode) {
             val nodeSpeedList = tokensPerSecondPerNode.computeIfAbsent(nodeName) { mutableListOf() }
             nodeSpeedList.add(tokensPerSecond)
@@ -135,18 +95,14 @@ class PerformanceTrackerService(
             }
         }
 
-        // Record processing time
         processingTimePerNode.computeIfAbsent(nodeName) { AtomicLong(0) }
             .addAndGet(processingTimeMs)
 
         processingTimePerModel.computeIfAbsent(modelId) { AtomicLong(0) }
             .addAndGet(processingTimeMs)
 
-        // Update concurrent request tracking
         val currentConcurrent = currentConcurrentPerNode.computeIfAbsent(nodeName) { AtomicLong(0) }
-
-        // Decrement current concurrent count
-        val newCount = currentConcurrent.decrementAndGet()
+        currentConcurrent.decrementAndGet()
 
         logger.debug {
             "Recorded request: node=$nodeName, model=$modelId, " +
@@ -165,20 +121,13 @@ class PerformanceTrackerService(
         }
     }
 
-    /**
-     * Records start of a request to track concurrent loads
-     *
-     * @param nodeName Name of the node processing the request
-     */
     fun recordRequestStart(nodeName: String) {
         val currentConcurrent = currentConcurrentPerNode.computeIfAbsent(nodeName) { AtomicLong(0) }
         val newCount = currentConcurrent.incrementAndGet()
 
-        // Update max concurrent if needed
         val maxConcurrent = maxConcurrentPerNode.computeIfAbsent(nodeName) { AtomicLong(0) }
         var currentMax = maxConcurrent.get()
 
-        // Update max if current is larger
         while (newCount > currentMax) {
             if (maxConcurrent.compareAndSet(currentMax, newCount)) {
                 break
@@ -195,57 +144,26 @@ class PerformanceTrackerService(
         }
     }
 
-    /**
-     * Gets the average generation speed for a node
-     *
-     * @param nodeName Name of the node
-     * @return Average tokens per second, or 0.0 if no data
-     */
     fun getAverageSpeedForNode(nodeName: String): Double {
         val speeds = tokensPerSecondPerNode[nodeName] ?: return 0.0
         return if (speeds.isEmpty()) 0.0 else speeds.average()
     }
 
-    /**
-     * Gets the average generation speed for a model
-     *
-     * @param modelId ID of the model
-     * @return Average tokens per second, or 0.0 if no data
-     */
     fun getAverageSpeedForModel(modelId: String): Double {
         val speeds = tokensPerSecondPerModel[modelId] ?: return 0.0
         return if (speeds.isEmpty()) 0.0 else speeds.average()
     }
 
-    /**
-     * Gets the current concurrent requests for a node
-     *
-     * @param nodeName Name of the node
-     * @return Current number of concurrent requests
-     */
     fun getCurrentConcurrentRequests(nodeName: String): Long {
         return currentConcurrentPerNode[nodeName]?.get() ?: 0
     }
 
-    /**
-     * Gets the maximum concurrent requests observed for a node
-     *
-     * @param nodeName Name of the node
-     * @return Maximum number of concurrent requests observed
-     */
     fun getMaxConcurrentRequests(nodeName: String): Long {
         return maxConcurrentPerNode[nodeName]?.get() ?: 0
     }
 
-    /**
-     * Gets all performance metrics as a map
-     *
-     * @return Map of performance metrics
-     */
     fun getPerformanceMetrics(): Map<String, Any> {
         val metrics = mutableMapOf<String, Any>()
-
-        // Node metrics
         val nodeMetrics = mutableMapOf<String, Map<String, Any>>()
         tokenCountPerNode.forEach { (nodeName, tokenCount) ->
             val nodeMap = mutableMapOf<String, Any>()
@@ -258,7 +176,6 @@ class PerformanceTrackerService(
         }
         metrics["nodes"] = nodeMetrics
 
-        // Model metrics
         val modelMetrics = mutableMapOf<String, Map<String, Any>>()
         tokenCountPerModel.forEach { (modelId, tokenCount) ->
             val modelMap = mutableMapOf<String, Any>()
@@ -269,23 +186,16 @@ class PerformanceTrackerService(
         }
         metrics["models"] = modelMetrics
 
-        // Historical snapshots
         metrics["snapshots"] = weeklySnapshots.map { it.toMap() }
 
         return metrics
     }
 
-    /**
-     * Takes a snapshot of current metrics for historical tracking
-     */
     private fun takeSnapshot() {
         val now = Instant.now().epochSecond
         val timeSinceLastSnapshot = now - lastSnapshotTime
 
-        if (timeSinceLastSnapshot < 60 * 60) {
-            // Don't take snapshots more often than hourly
-            return
-        }
+        if (timeSinceLastSnapshot < 60 * 60) return
 
         logger.info { "Taking performance snapshot" }
         launch {
@@ -312,13 +222,9 @@ class PerformanceTrackerService(
             )
         }
 
-        val snapshot = PerformanceSnapshot(
-            timestamp = now,
-            nodes = nodeSnapshots,
-            models = modelSnapshots
+        weeklySnapshots.add(
+            PerformanceSnapshot(now, nodeSnapshots, modelSnapshots)
         )
-
-        weeklySnapshots.add(snapshot)
         lastSnapshotTime = now
 
         logger.info { "Performance snapshot taken at ${Instant.ofEpochSecond(now)}" }
@@ -331,9 +237,6 @@ class PerformanceTrackerService(
         }
     }
 
-    /**
-     * Cleans up old snapshots, keeping only the last week
-     */
     private fun cleanupOldSnapshots() {
         logger.info { "Cleaning up old performance snapshots" }
 
@@ -360,52 +263,37 @@ class PerformanceTrackerService(
         }
     }
 
-    /**
-     * Data class for node snapshot data
-     */
     data class NodeSnapshotData(
         val totalTokens: Long,
         val averageSpeed: Double,
         val maxConcurrent: Long
     ) {
-        fun toMap(): Map<String, Any> {
-            return mapOf(
-                "totalTokens" to totalTokens,
-                "averageSpeed" to averageSpeed,
-                "maxConcurrent" to maxConcurrent
-            )
-        }
+        fun toMap(): Map<String, Any> = mapOf(
+            "totalTokens" to totalTokens,
+            "averageSpeed" to averageSpeed,
+            "maxConcurrent" to maxConcurrent
+        )
     }
 
-    /**
-     * Data class for model snapshot data
-     */
     data class ModelSnapshotData(
         val totalTokens: Long,
         val averageSpeed: Double
     ) {
-        fun toMap(): Map<String, Any> {
-            return mapOf(
-                "totalTokens" to totalTokens,
-                "averageSpeed" to averageSpeed
-            )
-        }
+        fun toMap(): Map<String, Any> = mapOf(
+            "totalTokens" to totalTokens,
+            "averageSpeed" to averageSpeed
+        )
     }
 
-    /**
-     * Data class for a performance snapshot
-     */
     data class PerformanceSnapshot(
         val timestamp: Long,
         val nodes: Map<String, NodeSnapshotData>,
         val models: Map<String, ModelSnapshotData>
     ) {
-        fun toMap(): Map<String, Any> {
-            return mapOf(
-                "timestamp" to timestamp,
-                "nodes" to nodes.mapValues { it.value.toMap() },
-                "models" to models.mapValues { it.value.toMap() }
-            )
-        }
+        fun toMap(): Map<String, Any> = mapOf(
+            "timestamp" to timestamp,
+            "nodes" to nodes.mapValues { it.value.toMap() },
+            "models" to models.mapValues { it.value.toMap() }
+        )
     }
 }
