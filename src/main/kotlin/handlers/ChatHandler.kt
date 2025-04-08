@@ -167,6 +167,169 @@ class ChatHandler(
         }
     }
 
+    // Add this method to your ChatHandler class
+    fun handleStream(ctx: RoutingContext) {
+        val requestId = ctx.get<String>("requestId") ?: "unknown"
+
+        try {
+            val req = ctx.body().asJsonObject().mapTo(ChatRequest::class.java)
+
+            if (req.model.isBlank()) {
+                respondWithError(ctx, 400, "Model is required")
+                return
+            }
+
+            if (req.messages.isEmpty()) {
+                respondWithError(ctx, 400, "At least one message is required")
+                return
+            }
+
+            logger.info {
+                "Stream chat request received: model=${req.model}, " +
+                        "messagesCount=${req.messages.size} (requestId: $requestId)"
+            }
+
+            // Set appropriate headers for streaming
+            ctx.response()
+                .putHeader("Content-Type", "text/event-stream")
+                .putHeader("Cache-Control", "no-cache")
+                .putHeader("Connection", "keep-alive")
+                .putHeader("X-Accel-Buffering", "no")
+                .setChunked(true)
+
+            launch {
+                logService.log("info", "Stream chat request received", mapOf(
+                    "model" to req.model,
+                    "messagesCount" to req.messages.size,
+                    "requestId" to requestId
+                ))
+
+                try {
+                    val startTime = System.currentTimeMillis()
+
+                    if (!modelRegistry.isModelAvailable(req.model)) {
+                        ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>("Model ${req.model} is not available on any node")).encode()}\n")
+                        ctx.response().end()
+                        return@launch
+                    }
+
+                    val nodeName = nodeService.getBestNodeForModel(req.model)
+
+                    if (nodeName == null) {
+                        ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>("No suitable node found for model ${req.model}")).encode()}\n")
+                        ctx.response().end()
+                        return@launch
+                    }
+
+                    val node = nodes.find { it.name == nodeName }
+                        ?: throw IllegalStateException("Node $nodeName not found in configuration")
+
+                    logger.info {
+                        "Selected node ${node.name} for stream chat request with model ${req.model} " +
+                                "(requestId: $requestId)"
+                    }
+
+                    logService.log("info", "Selected node for stream chat request", mapOf(
+                        "modelId" to req.model,
+                        "nodeName" to node.name,
+                        "requestId" to requestId
+                    ))
+
+                    // We'll create a modified request with the node name added
+                    val requestWithNode = req.copy(node = node.name, stream = true)
+
+                    performanceTracker.recordRequestStart(node.name)
+
+                    try {
+                        // Make a streaming request to the node
+                        val httpRequest = webClient.post(node.port, node.host, "/chat/stream")
+                            .putHeader("Content-Type", "application/json")
+                            .putHeader("X-Request-ID", requestId)
+                            .sendBuffer(Buffer.buffer(JsonObject.mapFrom(requestWithNode).encode()))
+                            .coAwait()
+
+                        // If the response wasn't successful, handle the error
+                        if (httpRequest.statusCode() != 200) {
+                            loadBalancer.recordFailure(node.name)
+                            ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>("Node ${node.name} returned status ${httpRequest.statusCode()}")).encode()}\n")
+                            ctx.response().end()
+                            return@launch
+                        }
+
+                        // Forward the streaming response directly
+                        val responseBuffer = httpRequest.body()
+
+                        // Write the response to our client
+                        ctx.response().write(responseBuffer)
+                        ctx.response().end()
+
+                        // Record performance metrics
+                        val endTime = System.currentTimeMillis()
+                        val processingTime = endTime - startTime
+                        loadBalancer.recordSuccess(node.name, processingTime)
+
+                        // Approximate metrics based on the response
+                        val textResponse = responseBuffer.toString()
+                        val approximateTokenCount = textResponse.split(Regex("\\s+")).size
+
+                        performanceTracker.recordRequest(
+                            nodeName = node.name,
+                            modelId = req.model,
+                            promptTokens = req.messages.sumOf { it.content.split(Regex("\\s+")).size },
+                            completionTokens = approximateTokenCount,
+                            processingTimeMs = processingTime
+                        )
+
+                        logService.log("info", "Stream chat request completed", mapOf(
+                            "nodeName" to node.name,
+                            "requestId" to requestId,
+                            "processingTimeMs" to processingTime,
+                            "approximateTokenCount" to approximateTokenCount
+                        ))
+                    } catch (e: Exception) {
+                        logger.error(e) { "Failed to process stream chat request (requestId: $requestId)" }
+                        loadBalancer.recordFailure(node.name)
+
+                        // Try to write an error response
+                        try {
+                            ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>(e.message ?: "Unknown error")).encode()}\n")
+                            ctx.response().end()
+                        } catch (writeError: Exception) {
+                            logger.error(writeError) { "Failed to write error response (requestId: $requestId)" }
+                        }
+
+                        logService.logError("Failed to process stream chat request", e, mapOf(
+                            "requestId" to requestId,
+                            "modelId" to req.model,
+                            "nodeName" to node.name
+                        ))
+                    }
+                } catch (e: Exception) {
+                    logger.error(e) { "Failed to process stream chat request (requestId: $requestId)" }
+
+                    // Try to write an error response
+                    try {
+                        ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>(e.message ?: "Unknown error")).encode()}\n")
+                        ctx.response().end()
+                    } catch (writeError: Exception) {
+                        logger.error(writeError) { "Failed to write error response (requestId: $requestId)" }
+                    }
+
+                    logService.logError("Failed to process stream chat request", e, mapOf(
+                        "requestId" to requestId,
+                        "modelId" to req.model
+                    ))
+                }
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to parse request (requestId: $requestId)" }
+            launch {
+                logService.logError("Failed to parse stream chat request", e, mapOf("requestId" to requestId))
+            }
+            respondWithError(ctx, 400, "Invalid request: ${e.message}")
+        }
+    }
+
     private fun respondWithError(ctx: RoutingContext, statusCode: Int, message: String) {
         val response = ApiResponse.error<Nothing>(message)
 

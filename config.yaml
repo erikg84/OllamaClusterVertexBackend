@@ -29,13 +29,13 @@ nodes:
     platform: "macos"
     capabilities: [ "tensor", "metal" ]
   - name: "BLACK_PRIME"
-    host: "localhost"
+    host: "192.168.68.135"
     port: 3000
     type: "cpu"
     platform: "windows"
     capabilities: ["avx512", "parallel"]
   - name: "BlackHP"
-    host: "192.168.68.145"
+    host: "localhost"
     port: 3000
     type: "cpu"
     platform: "windows"

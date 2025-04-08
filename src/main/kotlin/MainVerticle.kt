@@ -148,6 +148,7 @@ class MainVerticle : CoroutineVerticle() {
 
         router.post("/api/generate").handler { generateHandler.handle(it) }
         router.post("/api/chat").handler { chatHandler.handle(it) }
+        router.post("/api/chat/stream").handler { chatHandler.handleStream(it) }
 
         router.get("/admin/metrics").handler { adminHandler.getMetrics(it) }
         router.get("/admin/metrics/prometheus").handler { adminHandler.getPrometheusMetrics(it) }

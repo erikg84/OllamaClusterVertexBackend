@@ -75,7 +75,7 @@ class CoordinatorAgent(
     /**
      * Synthesizes the final response from all agent outputs
      */
-    suspend fun synthesizeFinalResponse(
+    fun synthesizeFinalResponse(
         query: String,
         agentResults: Map<AgentType, String>,
         conversationHistory: List<AgentMessage>
