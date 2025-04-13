@@ -11,13 +11,13 @@ mongodb:
 
 nodes:
   - name: "MAC_STUDIO"
-    host: "192.168.68.143"
+    host: "localhost"
     port: 3000
     type: "gpu"
     platform: "macos"
     capabilities: ["tensor", "metal"]
   - name: "MAC_MINI"
-    host: "192.168.68.136"
+    host: "192.168.68.110"
     port: 3000
     type: "gpu"
     platform: "macos"
@@ -35,14 +35,20 @@ nodes:
     platform: "windows"
     capabilities: ["avx512", "parallel"]
   - name: "BlackHP"
-    host: "localhost"
+    host: "192.168.68.145"
     port: 3000
     type: "cpu"
     platform: "windows"
     capabilities: ["avx512", "parallel"]
-#  - name: "BlackPicollo"
-#    host: "localhost"
-#    port: 3000
-#    type: "cpu"
-#    platform: "windows"
-#    capabilities: [ "avx512", "parallel" ]
+  - name: "BlackPicollo"
+    host: "192.168.68.152"
+    port: 3000
+    type: "cpu"
+    platform: "windows"
+    capabilities: [ "avx512", "parallel" ]
+  - name: "ZBOOK"
+    host: "192.168.68.177"
+    port: 3000
+    type: "cpu"
+    platform: "windows"
+    capabilities: [ "avx512", "parallel" ]
