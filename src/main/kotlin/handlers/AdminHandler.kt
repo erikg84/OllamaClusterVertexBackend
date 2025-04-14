@@ -5,6 +5,7 @@ import com.dallaslabs.services.AdminService
 import com.dallaslabs.services.LoadBalancerService
 import com.dallaslabs.services.LogService
 import com.dallaslabs.services.PerformanceTrackerService
+import com.dallaslabs.tracking.FlowTracker
 import io.vertx.core.Vertx
 import io.vertx.core.json.JsonObject
 import io.vertx.ext.web.RoutingContext
@@ -12,12 +13,13 @@ import io.vertx.kotlin.coroutines.dispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import mu.KotlinLogging
+import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 
 private val logger = KotlinLogging.logger {}
 
 /**
- * Handler for admin operations
+ * Handler for admin operations with FlowTracker integration
  */
 class AdminHandler(
     private val vertx: Vertx,
@@ -27,76 +29,139 @@ class AdminHandler(
     private val logService: LogService,
 ) : CoroutineScope by CoroutineScope(vertx.dispatcher()) {
 
+    /**
+     * Generic method to handle admin requests with FlowTracker integration
+     */
+    private suspend fun <T> handleAdminRequest(
+        ctx: RoutingContext,
+        requestName: String,
+        flowState: FlowTracker.FlowState,
+        requestAction: suspend () -> T
+    ) {
+        // Generate or retrieve request ID
+        val requestId = ctx.get<String>("requestId") ?: UUID.randomUUID().toString()
+
+        // Start flow tracking
+        FlowTracker.startFlow(requestId, mapOf(
+            "endpoint" to requestName,
+            "method" to ctx.request().method().name()
+        ))
+
+        logger.info { "$requestName requested (requestId: $requestId)" }
+
+        try {
+            // Update flow state to executing
+            FlowTracker.updateState(requestId, flowState)
+
+            // Log request
+            logService.log("info", "$requestName requested", mapOf("requestId" to requestId))
+
+            // Execute the request
+            val result = requestAction()
+
+            // Create successful response
+            val response = ApiResponse.success(result)
+
+            // Update flow state to completed
+            FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED, mapOf(
+                "responseType" to "success"
+            ))
+
+            // Send response
+            ctx.response()
+                .putHeader("Content-Type", "application/json")
+                .setStatusCode(200)
+                .end(JsonObject.mapFrom(response).encode())
+
+        } catch (e: Exception) {
+            // Record error in flow tracking
+            FlowTracker.recordError(
+                requestId,
+                "AdminRequestError",
+                e.message ?: "Unknown error",
+                failFlow = true
+            )
+
+            // Log error
+            logger.error(e) { "Failed to process $requestName (requestId: $requestId)" }
+            logService.logError("Failed to process $requestName", e, mapOf("requestId" to requestId))
+
+            // Create error response
+            val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
+
+            // Send error response
+            ctx.response()
+                .putHeader("Content-Type", "application/json")
+                .setStatusCode(500)
+                .end(JsonObject.mapFrom(response).encode())
+        }
+    }
+
     fun getMetrics(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
-        logger.info { "Metrics requested (requestId: $requestId)" }
-
         launch {
-            logService.log("info", "Metrics requested", mapOf("requestId" to requestId))
-            try {
-                val metrics = adminService.getMetrics()
-                val response = ApiResponse.success(metrics)
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(200)
-                    .end(JsonObject.mapFrom(response).encode())
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to get metrics (requestId: $requestId)" }
-                logService.logError("Failed to get metrics", e, mapOf("requestId" to requestId))
-                val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(500)
-                    .end(JsonObject.mapFrom(response).encode())
+            handleAdminRequest(
+                ctx,
+                "Metrics",
+                FlowTracker.FlowState.ANALYZING
+            ) {
+                adminService.getMetrics()
             }
         }
     }
 
     fun getLoadBalancingMetrics(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
-        logger.info { "Load balancing metrics requested (requestId: $requestId)" }
-
         launch {
-            logService.log("info", "Load balancing metrics requested", mapOf("requestId" to requestId))
-            try {
-                val metrics = loadBalancerService.getNodeMetrics()
-                val response = ApiResponse.success(metrics)
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(200)
-                    .end(JsonObject.mapFrom(response).encode())
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to get load balancing metrics (requestId: $requestId)" }
-                logService.logError("Failed to get load balancing metrics", e, mapOf("requestId" to requestId))
-                val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(500)
-                    .end(JsonObject.mapFrom(response).encode())
+            handleAdminRequest(
+                ctx,
+                "Load Balancing Metrics",
+                FlowTracker.FlowState.ANALYZING
+            ) {
+                loadBalancerService.getNodeMetrics()
             }
         }
     }
 
     fun getPrometheusMetrics(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
-        logger.info { "Prometheus metrics requested (requestId: $requestId)" }
-
         launch {
-            logService.log("info", "Prometheus metrics requested", mapOf("requestId" to requestId))
+            val requestId = ctx.get<String>("requestId") ?: UUID.randomUUID().toString()
+
+            // Start flow tracking
+            FlowTracker.startFlow(requestId, mapOf(
+                "endpoint" to "Prometheus Metrics",
+                "method" to ctx.request().method().name()
+            ))
+
+            logger.info { "Prometheus metrics requested (requestId: $requestId)" }
+
             try {
+                // Update flow state
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.ANALYZING)
+                logService.log("info", "Prometheus metrics requested", mapOf("requestId" to requestId))
+
+                // Get Prometheus metrics
                 val metrics = adminService.getPrometheusMetrics()
 
+                // Update flow state to completed
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED)
+
+                // Send response
                 ctx.response()
                     .putHeader("Content-Type", "text/plain")
                     .setStatusCode(200)
                     .end(metrics)
+
             } catch (e: Exception) {
+                // Record error in flow tracking
+                FlowTracker.recordError(
+                    requestId,
+                    "PrometheusMetricsError",
+                    e.message ?: "Unknown error",
+                    failFlow = true
+                )
+
                 logger.error(e) { "Failed to get Prometheus metrics (requestId: $requestId)" }
                 logService.logError("Failed to get Prometheus metrics", e, mapOf("requestId" to requestId))
+
                 val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
 
                 ctx.response()
@@ -108,136 +173,62 @@ class AdminHandler(
     }
 
     fun getPerformanceMetrics(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
-        logger.info { "Performance metrics requested (requestId: $requestId)" }
-
         launch {
-            logService.log("info", "Performance metrics requested", mapOf("requestId" to requestId))
-            try {
-                val metrics = performanceTracker.getPerformanceMetrics()
-                val response = ApiResponse.success(metrics)
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(200)
-                    .end(JsonObject.mapFrom(response).encode())
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to get performance metrics (requestId: $requestId)" }
-                logService.logError("Failed to get performance metrics", e, mapOf("requestId" to requestId))
-                val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(500)
-                    .end(JsonObject.mapFrom(response).encode())
+            handleAdminRequest(
+                ctx,
+                "Performance Metrics",
+                FlowTracker.FlowState.ANALYZING
+            ) {
+                performanceTracker.getPerformanceMetrics()
             }
         }
     }
 
     fun getRequestStatistics(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
-        logger.info { "Request statistics requested (requestId: $requestId)" }
-
         launch {
-            logService.log("info", "Request statistics requested", mapOf("requestId" to requestId))
-            try {
-                val stats = adminService.getRequestStatistics()
-                val response = ApiResponse.success(stats)
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(200)
-                    .end(JsonObject.mapFrom(response).encode())
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to get request statistics (requestId: $requestId)" }
-                logService.logError("Failed to get request statistics", e, mapOf("requestId" to requestId))
-                val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(500)
-                    .end(JsonObject.mapFrom(response).encode())
+            handleAdminRequest(
+                ctx,
+                "Request Statistics",
+                FlowTracker.FlowState.ANALYZING
+            ) {
+                adminService.getRequestStatistics()
             }
         }
     }
 
     fun getNodeHealth(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
-        logger.info { "Node health requested (requestId: $requestId)" }
-
         launch {
-            logService.log("info", "Node health requested", mapOf("requestId" to requestId))
-            try {
-                val health = adminService.getNodeHealth()
-                val response = ApiResponse.success(health)
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(200)
-                    .end(JsonObject.mapFrom(response).encode())
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to get node health (requestId: $requestId)" }
-                logService.logError("Failed to get node health", e, mapOf("requestId" to requestId))
-                val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(500)
-                    .end(JsonObject.mapFrom(response).encode())
+            handleAdminRequest(
+                ctx,
+                "Node Health",
+                FlowTracker.FlowState.TASK_DECOMPOSED
+            ) {
+                adminService.getNodeHealth()
             }
         }
     }
 
     fun getSystemInfo(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
-        logger.info { "System information requested (requestId: $requestId)" }
-
         launch {
-            logService.log("info", "System information requested", mapOf("requestId" to requestId))
-            try {
-                val sysInfo = adminService.getSystemInfo()
-                val response = ApiResponse.success(sysInfo)
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(200)
-                    .end(JsonObject.mapFrom(response).encode())
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to get system information (requestId: $requestId)" }
-                logService.logError("Failed to get system information", e, mapOf("requestId" to requestId))
-                val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(500)
-                    .end(JsonObject.mapFrom(response).encode())
+            handleAdminRequest(
+                ctx,
+                "System Information",
+                FlowTracker.FlowState.ANALYZING
+            ) {
+                adminService.getSystemInfo()
             }
         }
     }
 
     fun resetStatistics(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
-        logger.info { "Reset statistics requested (requestId: $requestId)" }
-
         launch {
-            logService.log("info", "Reset statistics requested", mapOf("requestId" to requestId))
-            try {
+            handleAdminRequest(
+                ctx,
+                "Reset Statistics",
+                FlowTracker.FlowState.EXECUTING
+            ) {
                 adminService.resetStatistics()
-                val response = ApiResponse.success<Unit>(message = "Statistics reset successfully")
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(200)
-                    .end(JsonObject.mapFrom(response).encode())
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to reset statistics (requestId: $requestId)" }
-                logService.logError("Failed to reset statistics", e, mapOf("requestId" to requestId))
-                val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
-
-                ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(500)
-                    .end(JsonObject.mapFrom(response).encode())
+                "Statistics reset successfully"
             }
         }
     }

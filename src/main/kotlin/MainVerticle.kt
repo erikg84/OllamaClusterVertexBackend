@@ -2,8 +2,10 @@ package com.dallaslabs
 
 import com.dallaslabs.config.ConfigLoader
 import com.dallaslabs.handlers.*
+import com.dallaslabs.models.ApiResponse
 import com.dallaslabs.models.Node
 import com.dallaslabs.services.*
+import com.dallaslabs.tracking.FlowTracker
 import com.dallaslabs.utils.Queue
 import io.vertx.core.json.JsonObject
 import io.vertx.ext.mongo.MongoClient
@@ -48,6 +50,8 @@ class MainVerticle : CoroutineVerticle() {
 
         val mongoClient = MongoClient.createShared(vertx, mongoConfig)
         val logService = LogService(vertx, mongoClient)
+        FlowTracker.initialize(vertx, logService)
+        logger.info { "FlowTracker initialized" }
         val performanceTrackerService = PerformanceTrackerService(vertx, logService)
         val queue = Queue(vertx, concurrency, logService)
         val nodeService = NodeService(vertx, nodes, logService)
@@ -189,6 +193,34 @@ class MainVerticle : CoroutineVerticle() {
         router.get("/api/performance/parameters/:model/:taskType").handler { performanceOptimizationHandler.getOptimizedParameters(it) }
         router.get("/api/performance/cache/stats").handler { performanceOptimizationHandler.getCacheStats(it) }
         router.get("/api/performance/batch/stats").handler { performanceOptimizationHandler.getBatchQueueStats(it) }
+
+        router.get("/api/flow/stats").handler { ctx ->
+            val stats = FlowTracker.getStatistics()
+            val response = ApiResponse.success(stats)
+            ctx.response()
+                .putHeader("Content-Type", "application/json")
+                .setStatusCode(200)
+                .end(JsonObject.mapFrom(response).encode())
+        }
+
+        router.get("/api/flow/:requestId").handler { ctx ->
+            val requestId = ctx.pathParam("requestId")
+            val flowInfo = FlowTracker.getFlowInfoAsJson(requestId)
+
+            if (flowInfo != null) {
+                val response = ApiResponse.success(flowInfo)
+                ctx.response()
+                    .putHeader("Content-Type", "application/json")
+                    .setStatusCode(200)
+                    .end(JsonObject.mapFrom(response).encode())
+            } else {
+                val response = ApiResponse.error<Nothing>("Flow not found")
+                ctx.response()
+                    .putHeader("Content-Type", "application/json")
+                    .setStatusCode(404)
+                    .end(JsonObject.mapFrom(response).encode())
+            }
+        }
 
         val staticHandler = StaticHandler.create()
             .setWebRoot("webroot")

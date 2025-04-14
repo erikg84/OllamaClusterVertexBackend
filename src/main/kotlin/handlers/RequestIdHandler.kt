@@ -1,5 +1,6 @@
 package com.dallaslabs.handlers
 
+import com.dallaslabs.tracking.FlowTracker
 import io.vertx.core.Handler
 import io.vertx.core.Vertx
 import io.vertx.core.json.JsonObject
@@ -8,9 +9,11 @@ import mu.KotlinLogging
 import java.util.UUID
 
 /**
- * Adds a unique request ID to each request
+ * Adds a unique request ID to each request and initializes request flow tracking
  */
 class RequestIdHandler private constructor() : Handler<RoutingContext> {
+
+    private val logger = KotlinLogging.logger {}
 
     override fun handle(ctx: RoutingContext) {
         // Check if request ID is already set
@@ -25,6 +28,22 @@ class RequestIdHandler private constructor() : Handler<RoutingContext> {
         // Set header in response
         ctx.response().putHeader("X-Request-ID", requestId)
 
+        // Start tracking the request flow
+        FlowTracker.startFlow(requestId, mapOf(
+            "path" to ctx.request().path(),
+            "method" to ctx.request().method().name(),
+            "clientIp" to ctx.request().remoteAddress().host(),
+            "userAgent" to (ctx.request().getHeader("User-Agent") ?: "unknown"),
+            "receivedAt" to System.currentTimeMillis()
+        ))
+
+        // Update state to RECEIVED
+        FlowTracker.updateState(requestId, FlowTracker.FlowState.RECEIVED, mapOf(
+            "requestSize" to ctx.request().bytesRead()
+        ))
+
+        logger.debug { "Request tracking initiated: $requestId" }
+
         ctx.next()
     }
 
@@ -36,7 +55,7 @@ class RequestIdHandler private constructor() : Handler<RoutingContext> {
 }
 
 /**
- * Logs request and response details and publishes metrics
+ * Logs request and response details, publishes metrics, and completes request flow tracking
  */
 class LoggingHandler private constructor(private val vertx: Vertx) : Handler<RoutingContext> {
 
@@ -54,6 +73,7 @@ class LoggingHandler private constructor(private val vertx: Vertx) : Handler<Rou
             val latency = end - start
             val status = ctx.response().statusCode
             val success = status < 400
+            val responseSize = ctx.response().bytesWritten()
 
             logger.info {
                 "Request processed: method=$method path=$path status=$status " +
@@ -69,6 +89,33 @@ class LoggingHandler private constructor(private val vertx: Vertx) : Handler<Rou
                 .put("latency", latency)
                 .put("success", success)
             )
+
+            // Record final metrics and complete flow tracking
+            FlowTracker.recordMetrics(requestId, mapOf(
+                "totalLatencyMs" to latency,
+                "statusCode" to status,
+                "responseSize" to responseSize,
+                "success" to success
+            ))
+
+            // Update flow state based on response status
+            if (success) {
+                // If not explicitly completed by a handler, mark as COMPLETED
+                if (FlowTracker.getFlowInfo(requestId)?.currentState != FlowTracker.FlowState.COMPLETED) {
+                    FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED, mapOf(
+                        "responseTime" to latency,
+                        "statusCode" to status,
+                        "completedAt" to System.currentTimeMillis()
+                    ))
+                }
+            } else {
+                // If not explicitly failed by a handler, mark as FAILED
+                if (FlowTracker.getFlowInfo(requestId)?.currentState != FlowTracker.FlowState.FAILED) {
+                    FlowTracker.recordError(requestId, "http_error", "Request failed with status $status")
+                }
+            }
+
+            logger.debug { "Request tracking completed: $requestId (${latency}ms)" }
         }
 
         ctx.next()

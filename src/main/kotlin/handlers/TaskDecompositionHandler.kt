@@ -6,6 +6,7 @@ import com.dallaslabs.models.GenerateRequest
 import com.dallaslabs.services.LogService
 import com.dallaslabs.services.TaskDecompositionService
 import com.dallaslabs.services.TaskStatus
+import com.dallaslabs.tracking.FlowTracker
 import io.vertx.core.Vertx
 import io.vertx.core.json.JsonObject
 import io.vertx.ext.web.RoutingContext
@@ -32,12 +33,44 @@ class TaskDecompositionHandler(
         val requestId = ctx.get<String>("requestId") ?: "unknown"
         logger.info { "Task decomposition requested for chat (requestId: $requestId)" }
 
+        // Start tracking flow with initial metadata
+        FlowTracker.startFlow(requestId, mapOf(
+            "endpoint" to "/api/workflow/decompose/chat",
+            "method" to "POST",
+            "type" to "chat_decomposition"
+        ))
+
         launch {
             try {
+                // Update state to ANALYZING
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.ANALYZING, mapOf(
+                    "analysisStartedAt" to System.currentTimeMillis()
+                ))
+
                 val request = ctx.body().asJsonObject().mapTo(ChatRequest::class.java)
                 logService.log("info", "Decomposing chat request", mapOf("requestId" to requestId))
 
+                // Record metadata about request
+                FlowTracker.recordMetrics(requestId, mapOf(
+                    "messagesCount" to request.messages.size,
+                    "charCount" to request.messages.sumOf { it.content.length },
+                    "model" to request.model
+                ))
+
+                // Update state to TASK_DECOMPOSED
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.TASK_DECOMPOSED)
+
+                val startTime = System.currentTimeMillis()
                 val workflow = taskDecompositionService.decomposeRequest(request)
+                val processingTime = System.currentTimeMillis() - startTime
+
+                // Record workflow details
+                FlowTracker.recordMetrics(requestId, mapOf(
+                    "workflowId" to workflow.id,
+                    "taskCount" to workflow.tasks.size,
+                    "strategy" to workflow.decompositionStrategy.toString(),
+                    "decompositionTime" to processingTime
+                ))
 
                 val response = ApiResponse.success(
                     data = mapOf(
@@ -57,6 +90,12 @@ class TaskDecompositionHandler(
                     message = "Request decomposed into ${workflow.tasks.size} tasks"
                 )
 
+                // Update state to COMPLETED
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED, mapOf(
+                    "responseTime" to processingTime,
+                    "statusCode" to 200
+                ))
+
                 ctx.response()
                     .putHeader("Content-Type", "application/json")
                     .setStatusCode(200)
@@ -64,6 +103,9 @@ class TaskDecompositionHandler(
             } catch (e: Exception) {
                 logger.error(e) { "Failed to decompose chat request (requestId: $requestId)" }
                 logService.logError("Failed to decompose chat request", e, mapOf("requestId" to requestId))
+
+                // Record error and transition to FAILED state
+                FlowTracker.recordError(requestId, "decomposition_error", e.message ?: "Unknown error")
 
                 val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
 
@@ -82,12 +124,43 @@ class TaskDecompositionHandler(
         val requestId = ctx.get<String>("requestId") ?: "unknown"
         logger.info { "Task decomposition requested for generate (requestId: $requestId)" }
 
+        // Start tracking flow with initial metadata
+        FlowTracker.startFlow(requestId, mapOf(
+            "endpoint" to "/api/workflow/decompose/generate",
+            "method" to "POST",
+            "type" to "generate_decomposition"
+        ))
+
         launch {
             try {
+                // Update state to ANALYZING
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.ANALYZING, mapOf(
+                    "analysisStartedAt" to System.currentTimeMillis()
+                ))
+
                 val request = ctx.body().asJsonObject().mapTo(GenerateRequest::class.java)
                 logService.log("info", "Decomposing generate request", mapOf("requestId" to requestId))
 
+                // Record metadata about request
+                FlowTracker.recordMetrics(requestId, mapOf(
+                    "promptLength" to request.prompt.length,
+                    "model" to request.model
+                ))
+
+                // Update state to TASK_DECOMPOSED
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.TASK_DECOMPOSED)
+
+                val startTime = System.currentTimeMillis()
                 val workflow = taskDecompositionService.decomposeRequest(request)
+                val processingTime = System.currentTimeMillis() - startTime
+
+                // Record workflow details
+                FlowTracker.recordMetrics(requestId, mapOf(
+                    "workflowId" to workflow.id,
+                    "taskCount" to workflow.tasks.size,
+                    "strategy" to workflow.decompositionStrategy.toString(),
+                    "decompositionTime" to processingTime
+                ))
 
                 val response = ApiResponse.success(
                     data = mapOf(
@@ -107,6 +180,12 @@ class TaskDecompositionHandler(
                     message = "Request decomposed into ${workflow.tasks.size} tasks"
                 )
 
+                // Update state to COMPLETED
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED, mapOf(
+                    "responseTime" to processingTime,
+                    "statusCode" to 200
+                ))
+
                 ctx.response()
                     .putHeader("Content-Type", "application/json")
                     .setStatusCode(200)
@@ -114,6 +193,9 @@ class TaskDecompositionHandler(
             } catch (e: Exception) {
                 logger.error(e) { "Failed to decompose generate request (requestId: $requestId)" }
                 logService.logError("Failed to decompose generate request", e, mapOf("requestId" to requestId))
+
+                // Record error and transition to FAILED state
+                FlowTracker.recordError(requestId, "decomposition_error", e.message ?: "Unknown error")
 
                 val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
 
@@ -133,11 +215,25 @@ class TaskDecompositionHandler(
         val workflowId = ctx.pathParam("id")
         logger.info { "Workflow info requested: $workflowId (requestId: $requestId)" }
 
+        // Start tracking flow with initial metadata
+        FlowTracker.startFlow(requestId, mapOf(
+            "endpoint" to "/api/workflow/${workflowId}",
+            "method" to "GET",
+            "type" to "workflow_info",
+            "workflowId" to workflowId
+        ))
+
         launch {
             try {
+                // Update state to ANALYZING
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.ANALYZING)
+
                 val workflow = taskDecompositionService.getWorkflow(workflowId)
 
                 if (workflow == null) {
+                    // Record error for non-existent workflow
+                    FlowTracker.recordError(requestId, "workflow_not_found", "Workflow not found: $workflowId")
+
                     val response = ApiResponse.error<Nothing>("Workflow not found: $workflowId")
 
                     ctx.response()
@@ -150,6 +246,17 @@ class TaskDecompositionHandler(
                 logService.log("info", "Retrieved workflow info", mapOf(
                     "requestId" to requestId,
                     "workflowId" to workflowId
+                ))
+
+                // Record workflow metrics
+                FlowTracker.recordMetrics(requestId, mapOf(
+                    "workflowStrategy" to workflow.decompositionStrategy.toString(),
+                    "taskCount" to workflow.tasks.size,
+                    "completedTasks" to workflow.tasks.count { it.status == TaskStatus.COMPLETED },
+                    "failedTasks" to workflow.tasks.count { it.status == TaskStatus.FAILED },
+                    "pendingTasks" to workflow.tasks.count { it.status == TaskStatus.PENDING },
+                    "runningTasks" to workflow.tasks.count { it.status == TaskStatus.RUNNING },
+                    "workflowAge" to (System.currentTimeMillis() - workflow.createdAt)
                 ))
 
                 val response = ApiResponse.success(
@@ -173,6 +280,11 @@ class TaskDecompositionHandler(
                     )
                 )
 
+                // Update state to COMPLETED
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED, mapOf(
+                    "statusCode" to 200
+                ))
+
                 ctx.response()
                     .putHeader("Content-Type", "application/json")
                     .setStatusCode(200)
@@ -183,6 +295,9 @@ class TaskDecompositionHandler(
                     "requestId" to requestId,
                     "workflowId" to workflowId
                 ))
+
+                // Record error and transition to FAILED state
+                FlowTracker.recordError(requestId, "workflow_retrieval_error", e.message ?: "Unknown error")
 
                 val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
 
@@ -202,14 +317,31 @@ class TaskDecompositionHandler(
         val workflowId = ctx.pathParam("id")
         logger.info { "Next executable tasks requested: $workflowId (requestId: $requestId)" }
 
+        // Start tracking flow with initial metadata
+        FlowTracker.startFlow(requestId, mapOf(
+            "endpoint" to "/api/workflow/${workflowId}/next",
+            "method" to "GET",
+            "type" to "next_tasks",
+            "workflowId" to workflowId
+        ))
+
         launch {
             try {
+                // Update state to ANALYZING
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.ANALYZING)
+
                 val nextTasks = taskDecompositionService.getNextExecutableTasks(workflowId)
 
                 logService.log("info", "Retrieved next executable tasks", mapOf(
                     "requestId" to requestId,
                     "workflowId" to workflowId,
                     "taskCount" to nextTasks.size
+                ))
+
+                // Record metrics about next tasks
+                FlowTracker.recordMetrics(requestId, mapOf(
+                    "nextTasksCount" to nextTasks.size,
+                    "nextTaskTypes" to nextTasks.map { it.type.toString() }
                 ))
 
                 val response = ApiResponse.success(
@@ -228,6 +360,11 @@ class TaskDecompositionHandler(
                     message = "${nextTasks.size} tasks ready for execution"
                 )
 
+                // Update state to COMPLETED
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED, mapOf(
+                    "statusCode" to 200
+                ))
+
                 ctx.response()
                     .putHeader("Content-Type", "application/json")
                     .setStatusCode(200)
@@ -238,6 +375,9 @@ class TaskDecompositionHandler(
                     "requestId" to requestId,
                     "workflowId" to workflowId
                 ))
+
+                // Record error and transition to FAILED state
+                FlowTracker.recordError(requestId, "next_tasks_retrieval_error", e.message ?: "Unknown error")
 
                 val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
 
@@ -259,17 +399,37 @@ class TaskDecompositionHandler(
 
         logger.info { "Task status update requested: $workflowId/$taskId (requestId: $requestId)" }
 
+        // Start tracking flow with initial metadata
+        FlowTracker.startFlow(requestId, mapOf(
+            "endpoint" to "/api/workflow/${workflowId}/task/${taskId}",
+            "method" to "PUT",
+            "type" to "task_update",
+            "workflowId" to workflowId,
+            "taskId" to taskId
+        ))
+
         launch {
             try {
+                // Update state to ANALYZING
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.ANALYZING)
+
                 val body = ctx.body().asJsonObject()
                 val statusString = body.getString("status")
                 val status = try {
                     TaskStatus.valueOf(statusString.uppercase())
                 } catch (e: Exception) {
+                    // Record validation error
+                    FlowTracker.recordError(requestId, "invalid_status", "Invalid status: $statusString")
                     throw IllegalArgumentException("Invalid status: $statusString")
                 }
 
                 val result = body.getJsonObject("result")
+
+                // Record task update metrics
+                FlowTracker.recordMetrics(requestId, mapOf(
+                    "newStatus" to status.toString(),
+                    "hasResult" to (result != null)
+                ))
 
                 taskDecompositionService.updateTaskStatus(workflowId, taskId, status, result)
 
@@ -284,6 +444,11 @@ class TaskDecompositionHandler(
                     message = "Task status updated successfully"
                 )
 
+                // Update state to COMPLETED
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED, mapOf(
+                    "statusCode" to 200
+                ))
+
                 ctx.response()
                     .putHeader("Content-Type", "application/json")
                     .setStatusCode(200)
@@ -295,6 +460,9 @@ class TaskDecompositionHandler(
                     "workflowId" to workflowId,
                     "taskId" to taskId
                 ))
+
+                // Record error and transition to FAILED state
+                FlowTracker.recordError(requestId, "task_update_error", e.message ?: "Unknown error")
 
                 val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
 
@@ -314,11 +482,28 @@ class TaskDecompositionHandler(
         val workflowId = ctx.pathParam("id")
         logger.info { "Final result requested: $workflowId (requestId: $requestId)" }
 
+        // Start tracking flow with initial metadata
+        FlowTracker.startFlow(requestId, mapOf(
+            "endpoint" to "/api/workflow/${workflowId}/result",
+            "method" to "GET",
+            "type" to "final_result",
+            "workflowId" to workflowId
+        ))
+
         launch {
             try {
+                // Update state to SYNTHESIZING
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.SYNTHESIZING, mapOf(
+                    "workflowId" to workflowId
+                ))
+
                 val finalResult = taskDecompositionService.getFinalResult(workflowId)
 
                 if (finalResult == null) {
+                    // Record error for unavailable result
+                    FlowTracker.recordError(requestId, "result_not_available",
+                        "Workflow not complete or result not available")
+
                     val response = ApiResponse.error<Nothing>("Workflow not complete or result not available")
 
                     ctx.response()
@@ -333,6 +518,16 @@ class TaskDecompositionHandler(
                     "workflowId" to workflowId
                 ))
 
+                // Record metrics about the final result
+                FlowTracker.recordMetrics(requestId, mapOf(
+                    "resultSize" to finalResult.encode().length
+                ))
+
+                // Update state to COMPLETED
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED, mapOf(
+                    "statusCode" to 200
+                ))
+
                 ctx.response()
                     .putHeader("Content-Type", "application/json")
                     .setStatusCode(200)
@@ -343,6 +538,9 @@ class TaskDecompositionHandler(
                     "requestId" to requestId,
                     "workflowId" to workflowId
                 ))
+
+                // Record error and transition to FAILED state
+                FlowTracker.recordError(requestId, "result_retrieval_error", e.message ?: "Unknown error")
 
                 val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
 
@@ -361,10 +559,26 @@ class TaskDecompositionHandler(
         val requestId = ctx.get<String>("requestId") ?: "unknown"
         logger.info { "Workflow cleanup requested (requestId: $requestId)" }
 
+        // Start tracking flow with initial metadata
+        FlowTracker.startFlow(requestId, mapOf(
+            "endpoint" to "/api/workflow/cleanup",
+            "method" to "POST",
+            "type" to "cleanup"
+        ))
+
         launch {
             try {
+                // Update state to ANALYZING
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.ANALYZING)
+
                 val body = ctx.body().asJsonObject()
                 val maxAgeMs = body.getLong("maxAgeMs", 24 * 60 * 60 * 1000) // Default to 24 hours
+
+                // Record cleanup parameters
+                FlowTracker.recordMetrics(requestId, mapOf(
+                    "maxAgeMs" to maxAgeMs,
+                    "maxAgeDays" to (maxAgeMs / (24 * 60 * 60 * 1000.0))
+                ))
 
                 taskDecompositionService.cleanupOldWorkflows(maxAgeMs)
 
@@ -377,6 +591,11 @@ class TaskDecompositionHandler(
                     message = "Old workflows cleaned up successfully"
                 )
 
+                // Update state to COMPLETED
+                FlowTracker.updateState(requestId, FlowTracker.FlowState.COMPLETED, mapOf(
+                    "statusCode" to 200
+                ))
+
                 ctx.response()
                     .putHeader("Content-Type", "application/json")
                     .setStatusCode(200)
@@ -384,6 +603,9 @@ class TaskDecompositionHandler(
             } catch (e: Exception) {
                 logger.error(e) { "Failed to cleanup workflows (requestId: $requestId)" }
                 logService.logError("Failed to cleanup workflows", e, mapOf("requestId" to requestId))
+
+                // Record error and transition to FAILED state
+                FlowTracker.recordError(requestId, "cleanup_error", e.message ?: "Unknown error")
 
                 val response = ApiResponse.error<Nothing>(e.message ?: "Unknown error")
 
