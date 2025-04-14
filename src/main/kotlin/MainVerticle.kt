@@ -69,6 +69,23 @@ class MainVerticle : CoroutineVerticle() {
         val clusterHandler = ClusterHandler(vertx, clusterService, logService)
         val adminHandler = AdminHandler(vertx, adminService, loadBalancerService, performanceTrackerService, logService)
 
+        val visionHandler = VisionHandler(
+            vertx,
+            queue,
+            modelRegistryService,
+            nodeService,
+            nodes,
+            performanceTrackerService,
+            loadBalancerService,
+            logService
+        )
+
+        val visionModelHandler = VisionModelHandler(
+            vertx,
+            modelRegistryService,
+            logService
+        )
+
         val performanceOptimizationService = PerformanceOptimizationService(
             vertx,
             modelRegistryService,
@@ -193,6 +210,10 @@ class MainVerticle : CoroutineVerticle() {
         router.get("/api/performance/parameters/:model/:taskType").handler { performanceOptimizationHandler.getOptimizedParameters(it) }
         router.get("/api/performance/cache/stats").handler { performanceOptimizationHandler.getCacheStats(it) }
         router.get("/api/performance/batch/stats").handler { performanceOptimizationHandler.getBatchQueueStats(it) }
+
+        router.get("/api/vision-models").handler { visionModelHandler.getVisionModels(it) }
+        router.post("/api/vision").handler { visionHandler.handle(it) }
+        router.post("/api/vision/stream").handler { visionHandler.handleStream(it) }
 
         router.get("/api/flow/stats").handler { ctx ->
             val stats = FlowTracker.getStatistics()

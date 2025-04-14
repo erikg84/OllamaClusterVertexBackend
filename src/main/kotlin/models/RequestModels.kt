@@ -62,6 +62,26 @@ data class Model(
     val details: ModelDetails? = null
 )
 
+data class VisionRequest(
+    val model: String = "llava:13b",
+    val prompt: String = "Describe this image in detail",
+    val node: String? = null,
+    val stream: Boolean = false,
+    val options: JsonObject? = null
+)
+
+data class VisionResponse(
+    val message: Message? = null,
+    val model: String? = null,
+    val createdAt: String? = null,
+    val usage: JsonObject? = null
+) {
+    data class Message(
+        val role: String? = null,
+        val content: String? = null
+    )
+}
+
 /**
  * Extension function to convert ModelInfo to frontend Model format
  */
