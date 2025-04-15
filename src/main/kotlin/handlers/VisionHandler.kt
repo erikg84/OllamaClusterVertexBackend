@@ -1,25 +1,20 @@
 package com.dallaslabs.handlers
 
-import com.dallaslabs.models.ApiResponse
 import com.dallaslabs.models.Node
-import com.dallaslabs.models.VisionRequest
 import com.dallaslabs.services.*
 import com.dallaslabs.utils.Queue
 import io.vertx.core.Vertx
-import io.vertx.core.buffer.Buffer
-import io.vertx.core.json.JsonObject
 import io.vertx.ext.web.RoutingContext
 import io.vertx.ext.web.client.WebClient
 import io.vertx.ext.web.client.WebClientOptions
 import io.vertx.ext.web.multipart.MultipartForm
+import io.vertx.kotlin.coroutines.await
 import io.vertx.kotlin.coroutines.coAwait
 import io.vertx.kotlin.coroutines.dispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import mu.KotlinLogging
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.Paths
 import java.util.UUID
 
 private val logger = KotlinLogging.logger {}
@@ -52,399 +47,229 @@ class VisionHandler(
     }
 
     fun handle(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
-        logger.info { "Vision analysis request received (requestId: $requestId)" }
+        val requestId = ctx.get<String>("requestId") ?: UUID.randomUUID().toString()
+        logger.info { "Vision request received (requestId: $requestId)" }
 
-        // Process form data and file upload
-        ctx.request().setExpectMultipart(true)
-
-        val model = ctx.request().getFormAttribute("model") ?: "llava:13b"
-        val prompt = ctx.request().getFormAttribute("prompt") ?: "Describe this image in detail"
-        val node = ctx.request().getFormAttribute("node") ?: "unknown"
-
-        var imageFile: File? = null
-
-        ctx.request().uploadHandler { upload ->
-            if (upload.name() == "image") {
-                val filename = "${UUID.randomUUID()}_${upload.filename()}"
-                val filePath = Paths.get(uploadsDir, filename).toString()
-                imageFile = File(filePath)
-
-                upload.streamToFileSystem(filePath).onComplete { ar ->
-                    if (ar.succeeded()) {
-                        logger.info { "File uploaded successfully: $filePath (requestId: $requestId)" }
-
-                        val visionRequest = VisionRequest(model, prompt, node)
-                        processVisionRequest(ctx, visionRequest, imageFile!!, requestId)
-                    } else {
-                        logger.error(ar.cause()) { "File upload failed (requestId: $requestId)" }
-                        respondWithError(ctx, 500, "File upload failed: ${ar.cause().message}")
-                    }
-                }
-            }
+        val fileUploads = ctx.fileUploads()
+        if (fileUploads.isEmpty()) {
+            ctx.response().setStatusCode(400).end("No image file provided")
+            return
         }
 
-        // Handle case where no file is uploaded
-        ctx.request().endHandler {
-            if (imageFile == null) {
-                logger.error { "No image file provided (requestId: $requestId)" }
-                respondWithError(ctx, 400, "No image file provided")
+        val imageUpload = fileUploads.first()
+        val model = ctx.request().getFormAttribute("model") ?: "llava:13b"
+        val prompt = ctx.request().getFormAttribute("prompt") ?: "Describe this image in detail"
+        val node = ctx.request().getFormAttribute("node") ?: "local"
+
+        launch {
+            try {
+                // Log the incoming request
+                logService.log("info", "Vision request received", mapOf(
+                    "model" to model,
+                    "prompt" to prompt,
+                    "imageSize" to imageUpload.size(),
+                    "requestId" to requestId
+                ))
+
+                // Check if model is available
+                if (!modelRegistry.isModelAvailable(model)) {
+                    throw IllegalArgumentException("Model $model is not available on any node")
+                }
+
+                // Get the best node for this model
+                val nodeName = nodeService.getBestNodeForModel(model)
+                    ?: throw IllegalStateException("No suitable node found for model $model")
+
+                val nodeFromServer = nodes.find { it.name == nodeName }
+                    ?: throw IllegalStateException("Node $nodeName not found in configuration")
+
+                logger.info { "Selected node $nodeName for vision request (requestId: $requestId)" }
+
+                // Create the multipart form
+                val multipartForm = MultipartForm.create()
+                multipartForm.binaryFileUpload(
+                    "image",
+                    imageUpload.fileName(),
+                    imageUpload.uploadedFileName(),
+                    imageUpload.contentType()
+                )
+                multipartForm.attribute("model", model)
+                multipartForm.attribute("prompt", prompt)
+                multipartForm.attribute("node", nodeName)
+
+                // Start tracking performance
+                val startTime = System.currentTimeMillis()
+                performanceTracker.recordRequestStart(nodeName)
+
+                // Use the queue for request management and load balancing
+                val result = queue.add {
+                    try {
+                        val response = webClient.post(nodeFromServer.port, nodeFromServer.host, "/vision")
+                            .putHeader("X-Request-ID", requestId)
+                            .sendMultipartForm(multipartForm)
+                            .coAwait()
+
+                        // Record metrics
+                        val endTime = System.currentTimeMillis()
+                        val processingTime = endTime - startTime
+
+                        if (response.statusCode() == 200) {
+                            loadBalancer.recordSuccess(nodeName, processingTime)
+
+                            // Extract usage metrics if available
+                            val responseBody = try {
+                                response.bodyAsJsonObject()
+                            } catch (e: Exception) {
+                                logger.warn { "Failed to parse response body as JSON: ${e.message}" }
+                                null
+                            }
+                            val usage = responseBody?.getJsonObject("usage")
+                            val promptTokens = usage?.getInteger("prompt_tokens") ?: 0
+                            val completionTokens = usage?.getInteger("completion_tokens") ?: 0
+
+                            performanceTracker.recordRequest(
+                                nodeName = nodeName,
+                                modelId = model,
+                                promptTokens = promptTokens,
+                                completionTokens = completionTokens,
+                                processingTimeMs = processingTime
+                            )
+
+                            logService.log("info", "Vision request completed", mapOf(
+                                "nodeName" to nodeName,
+                                "requestId" to requestId,
+                                "processingTimeMs" to processingTime,
+                                "promptTokens" to promptTokens,
+                                "completionTokens" to completionTokens
+                            ))
+
+                            response
+                        } else {
+                            loadBalancer.recordFailure(nodeName)
+                            logService.log("error", "Vision request failed", mapOf(
+                                "nodeName" to nodeName,
+                                "requestId" to requestId,
+                                "statusCode" to response.statusCode(),
+                                "errorMessage" to response.bodyAsString()
+                            ))
+                            response
+                        }
+                    } catch (e: Exception) {
+                        loadBalancer.recordFailure(nodeName)
+                        logService.logError("Vision request failed", e, mapOf(
+                            "requestId" to requestId,
+                            "modelId" to model,
+                            "nodeName" to nodeName
+                        ))
+                        throw e
+                    }
+                }.coAwait()
+
+                // Clean up the uploaded file
+                vertx.fileSystem().delete(imageUpload.uploadedFileName()).await()
+
+                // Return the response
+                if (result.statusCode() == 200) {
+                    ctx.response()
+                        .putHeader("Content-Type", "application/json")
+                        .end(result.body())
+                } else {
+                    ctx.response()
+                        .setStatusCode(result.statusCode())
+                        .end("Vision API error: ${result.bodyAsString()}")
+                }
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to process vision request (requestId: $requestId)" }
+                ctx.response().setStatusCode(500).end("Error: ${e.message}")
+
+                try {
+                    vertx.fileSystem().delete(imageUpload.uploadedFileName())
+                } catch (deleteError: Exception) {
+                    logger.error(deleteError) { "Failed to delete temporary file: ${imageUpload.uploadedFileName()}" }
+                }
             }
         }
     }
 
     fun handleStream(ctx: RoutingContext) {
-        val requestId = ctx.get<String>("requestId") ?: "unknown"
+        val requestId = ctx.get<String>("requestId") ?: UUID.randomUUID().toString()
         logger.info { "Vision stream request received (requestId: $requestId)" }
 
-        // Process form data and file upload
-        ctx.request().setExpectMultipart(true)
+        val fileUploads = ctx.fileUploads()
+        if (fileUploads.isEmpty()) {
+            ctx.response().setStatusCode(400).end("No image file provided")
+            return
+        }
 
+        val imageUpload = fileUploads.first()
         val model = ctx.request().getFormAttribute("model") ?: "llava:13b"
         val prompt = ctx.request().getFormAttribute("prompt") ?: "Describe this image in detail"
-        val node = ctx.request().getFormAttribute("node") ?: "unknown"
+        val node = ctx.request().getFormAttribute("node") ?: "local"
 
-        var imageFile: File? = null
-
-        ctx.request().uploadHandler { upload ->
-            if (upload.name() == "image") {
-                val filename = "${UUID.randomUUID()}_${upload.filename()}"
-                val filePath = Paths.get(uploadsDir, filename).toString()
-                imageFile = File(filePath)
-
-                upload.streamToFileSystem(filePath).onComplete { ar ->
-                    if (ar.succeeded()) {
-                        logger.info { "File uploaded successfully: $filePath (requestId: $requestId)" }
-
-                        val visionRequest = VisionRequest(model, prompt, node, stream = true)
-                        processVisionStreamRequest(ctx, visionRequest, imageFile!!, requestId)
-                    } else {
-                        logger.error(ar.cause()) { "File upload failed (requestId: $requestId)" }
-                        respondWithError(ctx, 500, "File upload failed: ${ar.cause().message}")
-                    }
-                }
-            }
-        }
-
-        // Handle case where no file is uploaded
-        ctx.request().endHandler {
-            if (imageFile == null) {
-                logger.error { "No image file provided (requestId: $requestId)" }
-                respondWithError(ctx, 400, "No image file provided")
-            }
-        }
-    }
-
-    private fun processVisionRequest(ctx: RoutingContext, req: VisionRequest, imageFile: File, requestId: String) {
         launch {
-            logService.log("info", "Vision analysis request received", mapOf(
-                "model" to req.model,
-                "prompt" to req.prompt,
-                "imageSize" to imageFile.length(),
-                "requestId" to requestId
-            ))
-
             try {
-                if (!modelRegistry.isModelAvailable(req.model)) {
-                    cleanupFile(imageFile)
-                    throw IllegalArgumentException("Model ${req.model} is not available on any node")
-                }
-
-                val nodeName = nodeService.getBestNodeForModel(req.model)
-
-                if (nodeName == null) {
-                    cleanupFile(imageFile)
-                    throw IllegalStateException("No suitable node found for model ${req.model}")
-                }
-
-                val node = nodes.find { it.name == nodeName }
-                    ?: throw IllegalStateException("Node $nodeName not found in configuration")
-
-                logger.info {
-                    "Selected node ${node.name} for vision request with model ${req.model} " +
-                            "(requestId: $requestId)"
-                }
-
-                logService.log("info", "Selected node for vision request", mapOf(
-                    "modelId" to req.model,
-                    "nodeName" to node.name,
-                    "requestId" to requestId
-                ))
-
-                val startTime = System.currentTimeMillis()
-                performanceTracker.recordRequestStart(node.name)
-
-                val result = queue.add<JsonObject> {
-                    try {
-                        // Read the file content
-                        val fileBytes = Files.readAllBytes(imageFile.toPath())
-                        val fileBuffer = Buffer.buffer(fileBytes)
-                        val contentType = determineContentType(imageFile.name)
-
-                        // Create a multipart form with the image file and parameters
-                        val form = MultipartForm.create()
-                            .binaryFileUpload("image", imageFile.name, fileBuffer, contentType)
-                            .attribute("model", req.model)
-                            .attribute("prompt", req.prompt)
-                            .attribute("node", node.name)
-
-                        // Send the request to the node
-                        val response = webClient.post(node.port, node.host, "/vision")
-                            .putHeader("X-Request-ID", requestId)
-                            .sendMultipartForm(form)
-                            .coAwait()
-
-                        // Clean up the file after request
-                        cleanupFile(imageFile)
-
-                        if (response.statusCode() != 200) {
-                            loadBalancer.recordFailure(node.name)
-                            throw RuntimeException("Node ${node.name} returned status ${response.statusCode()}")
-                        }
-
-                        val responseJson = response.bodyAsJsonObject()
-
-                        // Extract usage metrics for enhanced logging
-                        val usage = responseJson.getJsonObject("usage") ?: JsonObject()
-                        val promptTokens = usage.getInteger("prompt_tokens", 0)
-                        val completionTokens = usage.getInteger("completion_tokens", 0)
-
-                        val endTime = System.currentTimeMillis()
-                        val processingTime = endTime - startTime
-                        loadBalancer.recordSuccess(node.name, processingTime)
-
-                        performanceTracker.recordRequest(
-                            nodeName = node.name,
-                            modelId = req.model,
-                            promptTokens = promptTokens,
-                            completionTokens = completionTokens,
-                            processingTimeMs = processingTime
-                        )
-
-                        logService.log("info", "Vision request completed", mapOf(
-                            "nodeName" to node.name,
-                            "requestId" to requestId,
-                            "processingTimeMs" to processingTime,
-                            "promptTokens" to promptTokens,
-                            "completionTokens" to completionTokens
-                        ))
-
-                        responseJson
-                    } catch (e: Exception) {
-                        // Make sure we clean up the file even on errors
-                        cleanupFile(imageFile)
-                        throw e
-                    }
-                }.coAwait()
-
+                // Set headers for streaming
                 ctx.response()
-                    .putHeader("Content-Type", "application/json")
-                    .setStatusCode(200)
-                    .end(result.encode())
+                    .putHeader("Content-Type", "text/event-stream")
+                    .putHeader("Cache-Control", "no-cache")
+                    .putHeader("Connection", "keep-alive")
+                    .putHeader("X-Accel-Buffering", "no")
+                    .setChunked(true)
 
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to process vision request (requestId: $requestId)" }
-                logService.logError("Failed to process vision request", e, mapOf(
-                    "requestId" to requestId,
-                    "modelId" to req.model
-                ))
+                val multipartForm = MultipartForm.create()
+                multipartForm.binaryFileUpload(
+                    "image",
+                    imageUpload.fileName(),
+                    imageUpload.uploadedFileName(),
+                    imageUpload.contentType()
+                )
+                multipartForm.attribute("model", model)
+                multipartForm.attribute("prompt", prompt)
+                multipartForm.attribute("node", node)
 
-                // Make sure we clean up the file on errors
-                cleanupFile(imageFile)
-
-                respondWithError(ctx, 500, e.message ?: "Unknown error")
-            }
-        }
-    }
-
-    private fun processVisionStreamRequest(ctx: RoutingContext, req: VisionRequest, imageFile: File, requestId: String) {
-        launch {
-            logService.log("info", "Vision stream request received", mapOf(
-                "model" to req.model,
-                "prompt" to req.prompt,
-                "imageSize" to imageFile.length(),
-                "requestId" to requestId
-            ))
-
-            // Set headers for streaming
-            ctx.response()
-                .putHeader("Content-Type", "text/event-stream")
-                .putHeader("Cache-Control", "no-cache")
-                .putHeader("Connection", "keep-alive")
-                .putHeader("X-Accel-Buffering", "no")
-                .setChunked(true)
-
-            try {
-                if (!modelRegistry.isModelAvailable(req.model)) {
-                    cleanupFile(imageFile)
-                    ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>("Model ${req.model} is not available on any node")).encode()}\n")
-                    ctx.response().end()
-                    return@launch
-                }
-
-                val nodeName = nodeService.getBestNodeForModel(req.model)
-
-                if (nodeName == null) {
-                    cleanupFile(imageFile)
-                    ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>("No suitable node found for model ${req.model}")).encode()}\n")
-                    ctx.response().end()
-                    return@launch
-                }
-
-                val node = nodes.find { it.name == nodeName }
+                val nodeName = nodeService.getBestNodeForModel(model)
+                val nodeFromServer = nodes.find { it.name == nodeName }
                     ?: throw IllegalStateException("Node $nodeName not found in configuration")
 
-                logger.info {
-                    "Selected node ${node.name} for vision stream request with model ${req.model} " +
-                            "(requestId: $requestId)"
-                }
+                // Create a web client that directly streams the response
+                val streamClient = webClient.post(nodeFromServer.port, nodeFromServer.host, "/vision/stream")
+                    .putHeader("X-Request-ID", requestId)
 
-                logService.log("info", "Selected node for vision stream request", mapOf(
-                    "modelId" to req.model,
-                    "nodeName" to node.name,
-                    "requestId" to requestId
-                ))
+                // Send the form data
+                val request = streamClient.sendMultipartForm(multipartForm)
 
-                val startTime = System.currentTimeMillis()
-                performanceTracker.recordRequestStart(node.name)
+                // Set up handlers before awaiting response
+                request.onComplete { ar ->
+                    if (ar.succeeded()) {
+                        val response = ar.result()
 
-                try {
-                    // Read the file content
-                    val fileBytes = Files.readAllBytes(imageFile.toPath())
-                    val fileBuffer = Buffer.buffer(fileBytes)
-                    val contentType = determineContentType(imageFile.name)
-
-                    // Create a multipart form with the image file and parameters
-                    val form = MultipartForm.create()
-                        .binaryFileUpload("image", imageFile.name, fileBuffer, contentType)
-                        .attribute("model", req.model)
-                        .attribute("prompt", req.prompt)
-                        .attribute("node", node.name)
-
-                    // Send the request to the node for streaming
-                    val streamRequest = webClient.post(node.port, node.host, "/vision/stream")
-                        .putHeader("X-Request-ID", requestId)
-                        .sendMultipartForm(form)
-                        .coAwait()
-
-                    // Clean up the file after request
-                    cleanupFile(imageFile)
-
-                    // Process the response as a stream
-                    if (streamRequest.statusCode() == 200) {
-                        // Forward the streaming response to the client
-                        val responseBody = streamRequest.body()
-                        ctx.response().write(responseBody)
+                        // Forward the streaming response
+                        ctx.response().write(response.body())
                         ctx.response().end()
-
-                        // Record success metrics
-                        val endTime = System.currentTimeMillis()
-                        val processingTime = endTime - startTime
-                        loadBalancer.recordSuccess(node.name, processingTime)
-
-                        // For streaming responses, we estimate token counts
-                        val responseText = responseBody.toString()
-                        val estimatedCompletionTokens = responseText.length / 4
-
-                        performanceTracker.recordRequest(
-                            nodeName = node.name,
-                            modelId = req.model,
-                            promptTokens = req.prompt.length / 4, // Rough estimate
-                            completionTokens = estimatedCompletionTokens,
-                            processingTimeMs = processingTime
-                        )
-
-                        logService.log("info", "Vision stream request completed", mapOf(
-                            "nodeName" to node.name,
-                            "requestId" to requestId,
-                            "processingTimeMs" to processingTime,
-                            "estimatedTokens" to estimatedCompletionTokens
-                        ))
                     } else {
-                        // Handle error response
-                        loadBalancer.recordFailure(node.name)
-                        ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>("Node ${node.name} returned status ${streamRequest.statusCode()}")).encode()}\n")
-                        ctx.response().end()
-
-                        logService.logError("Vision stream request failed", RuntimeException("Node ${node.name} returned status ${streamRequest.statusCode()}"), mapOf(
-                            "requestId" to requestId,
-                            "modelId" to req.model,
-                            "nodeName" to node.name,
-                            "statusCode" to streamRequest.statusCode()
-                        ))
+                        ctx.response()
+                            .setStatusCode(500)
+                            .end("Vision API stream error: ${ar.cause().message}")
                     }
-                } catch (e: Exception) {
-                    // Make sure we clean up the file even on errors
-                    cleanupFile(imageFile)
 
-                    logger.error(e) { "Failed to process vision stream request (requestId: $requestId)" }
-                    loadBalancer.recordFailure(node.name)
-
-                    // Try to write an error response
+                    // Clean up regardless of outcome
                     try {
-                        ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>(e.message ?: "Unknown error")).encode()}\n")
-                        ctx.response().end()
-                    } catch (writeError: Exception) {
-                        logger.error(writeError) { "Failed to write error response (requestId: $requestId)" }
+                        vertx.fileSystem().delete(imageUpload.uploadedFileName())
+                    } catch (e: Exception) {
+                        logger.error(e) { "Failed to delete temporary file: ${imageUpload.uploadedFileName()}" }
                     }
-
-                    logService.logError("Failed to process vision stream request", e, mapOf(
-                        "requestId" to requestId,
-                        "modelId" to req.model,
-                        "nodeName" to node.name
-                    ))
                 }
+
             } catch (e: Exception) {
-                // Make sure we clean up the file on errors
-                cleanupFile(imageFile)
-
                 logger.error(e) { "Failed to process vision stream request (requestId: $requestId)" }
+                ctx.response().setStatusCode(500).end("Error: ${e.message}")
 
-                // Try to write an error response
                 try {
-                    ctx.response().write("${JsonObject.mapFrom(ApiResponse.error<Nothing>(e.message ?: "Unknown error")).encode()}\n")
-                    ctx.response().end()
-                } catch (writeError: Exception) {
-                    logger.error(writeError) { "Failed to write error response (requestId: $requestId)" }
+                    vertx.fileSystem().delete(imageUpload.uploadedFileName())
+                } catch (deleteError: Exception) {
+                    logger.error(deleteError) { "Failed to delete temporary file: ${imageUpload.uploadedFileName()}" }
                 }
-
-                logService.logError("Failed to process vision stream request", e, mapOf(
-                    "requestId" to requestId,
-                    "modelId" to req.model
-                ))
             }
         }
-    }
-
-    private fun determineContentType(filename: String): String {
-        return when {
-            filename.endsWith(".jpg", true) || filename.endsWith(".jpeg", true) -> "image/jpeg"
-            filename.endsWith(".png", true) -> "image/png"
-            filename.endsWith(".gif", true) -> "image/gif"
-            filename.endsWith(".webp", true) -> "image/webp"
-            filename.endsWith(".bmp", true) -> "image/bmp"
-            filename.endsWith(".svg", true) -> "image/svg+xml"
-            filename.endsWith(".tiff", true) || filename.endsWith(".tif", true) -> "image/tiff"
-            else -> "application/octet-stream"
-        }
-    }
-
-    private fun cleanupFile(file: File) {
-        try {
-            if (file.exists()) {
-                file.delete()
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to delete temporary file: ${file.absolutePath}" }
-        }
-    }
-
-    private fun respondWithError(ctx: RoutingContext, statusCode: Int, message: String) {
-        val response = ApiResponse.error<Nothing>(message)
-
-        ctx.response()
-            .putHeader("Content-Type", "application/json")
-            .setStatusCode(statusCode)
-            .end(JsonObject.mapFrom(response).encode())
     }
 }
