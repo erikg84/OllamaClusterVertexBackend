@@ -19,7 +19,6 @@ private val logger = KotlinLogging.logger {}
  */
 class TaskDecompositionService(
     private val vertx: Vertx,
-    private val modelRegistry: ModelRegistryService,
     private val logService: LogService
 ) : CoroutineScope by CoroutineScope(vertx.dispatcher()) {
 

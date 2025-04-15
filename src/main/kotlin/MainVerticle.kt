@@ -62,7 +62,7 @@ class MainVerticle : CoroutineVerticle() {
         val logViewerHandler = LogViewerHandler(vertx, logService, nodeService, logService)
         val healthHandler = HealthHandler(logService)
         val nodeHandler = NodeHandler(vertx, nodeService, logService)
-        val taskDecompositionService = TaskDecompositionService(vertx, modelRegistryService, logService)
+        val taskDecompositionService = TaskDecompositionService(vertx, logService)
         val taskDecompositionHandler = TaskDecompositionHandler(vertx, taskDecompositionService, logService)
         val chatHandler = ChatHandler(vertx, queue, modelRegistryService, nodeService, nodes, performanceTrackerService, loadBalancerService, logService)
         val queueHandler = QueueHandler(queue, logService)
@@ -141,7 +141,7 @@ class MainVerticle : CoroutineVerticle() {
 
         router.route().handler(BodyHandler.create())
         router.route().handler(RequestIdHandler.create())
-        router.route().handler(LoggingHandler.create(vertx))
+        router.route().handler(LoggingHandler.create(vertx, logService))
 
         router.get("/api/logs").handler { logViewerHandler.getLogs(it) }
         router.get("/api/servers").handler { logViewerHandler.getServers(it) }

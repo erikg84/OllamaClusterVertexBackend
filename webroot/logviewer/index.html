@@ -359,10 +359,14 @@
         // Fetch available servers from API
         async function loadServers() {
             try {
-                // First try to get nodes from the cluster API
-                const response = await fetch(`api/nodes/names`);
+                // First try to get nodes from the cluster API (note the leading slash)
+                const response = await fetch('/api/nodes/names');
+                console.log('Fetching server names from: /api/nodes/names');
+
                 if (response.ok) {
                     const nodes = await response.json();
+                    console.log('Received nodes:', nodes);
+
                     serverFilter.innerHTML = '<option value="">All Servers</option>';
                     nodes.forEach(node => {
                         const option = document.createElement('option');
@@ -370,34 +374,61 @@
                         option.textContent = node;
                         serverFilter.appendChild(option);
                     });
+
+                    console.log('Server filter populated with node names');
                 } else {
-                    // Fallback to getting servers from logs collection
-                    const fallbackResponse = await fetch(`api/servers`);
-                    const servers = await fallbackResponse.json();
-                    serverFilter.innerHTML = '<option value="">All Servers</option>';
-                    servers.forEach(server => {
-                        const option = document.createElement('option');
-                        option.value = server;
-                        option.textContent = server;
-                        serverFilter.appendChild(option);
-                    });
+                    console.warn('Failed to get nodes, status:', response.status);
+                    console.log('Trying fallback to server list...');
+
+                    // Fallback to getting servers from logs collection (note the leading slash)
+                    const fallbackResponse = await fetch('/api/servers');
+
+                    if (fallbackResponse.ok) {
+                        const servers = await fallbackResponse.json();
+                        console.log('Received servers:', servers);
+
+                        serverFilter.innerHTML = '<option value="">All Servers</option>';
+                        servers.forEach(server => {
+                            const option = document.createElement('option');
+                            option.value = server;
+                            option.textContent = server;
+                            serverFilter.appendChild(option);
+                        });
+
+                        console.log('Server filter populated with server IDs');
+                    } else {
+                        console.error('Fallback server fetch failed, status:', fallbackResponse.status);
+                        serverFilter.innerHTML = '<option value="">All Servers</option>';
+                    }
                 }
             } catch (error) {
                 console.error('Error loading servers:', error);
 
-                // Try fallback if first attempt fails
+                // Try fallback if first attempt fails (note the leading slash)
                 try {
-                    const fallbackResponse = await fetch(`api/servers`);
-                    const servers = await fallbackResponse.json();
-                    serverFilter.innerHTML = '<option value="">All Servers</option>';
-                    servers.forEach(server => {
-                        const option = document.createElement('option');
-                        option.value = server;
-                        option.textContent = server;
-                        serverFilter.appendChild(option);
-                    });
+                    console.log('Trying final fallback attempt...');
+                    const fallbackResponse = await fetch('/api/servers');
+
+                    if (fallbackResponse.ok) {
+                        const servers = await fallbackResponse.json();
+                        console.log('Received servers in fallback:', servers);
+
+                        serverFilter.innerHTML = '<option value="">All Servers</option>';
+                        servers.forEach(server => {
+                            const option = document.createElement('option');
+                            option.value = server;
+                            option.textContent = server;
+                            serverFilter.appendChild(option);
+                        });
+
+                        console.log('Server filter populated in fallback');
+                    } else {
+                        console.error('Final fallback failed, status:', fallbackResponse.status);
+                        serverFilter.innerHTML = '<option value="">All Servers (No servers found)</option>';
+                    }
                 } catch (fallbackError) {
-                    console.error('Error loading servers (fallback):', fallbackError);
+                    console.error('Error in fallback server loading:', fallbackError);
+                    serverFilter.innerHTML = '<option value="">All Servers (Error loading)</option>';
                 }
             }
         }
@@ -405,65 +436,114 @@
         // Fetch logs using applied filters
         async function loadLogs() {
             try {
+                // Display loading indicator
+                logEntries.innerHTML = '<div class="text-center"><div class="spinner-border text-light" role="status"></div><p>Loading logs...</p></div>';
+
                 const params = new URLSearchParams();
                 params.append('page', currentPage);
                 params.append('limit', itemsPerPage);
-                if (serverFilter.value) params.append('serverId', serverFilter.value);
+
+                if (serverFilter.value) {
+                    params.append('serverId', serverFilter.value);
+                    console.log(`Filtering by server: ${serverFilter.value}`);
+                }
+
                 if (levelFilter.value) params.append('level', levelFilter.value);
                 if (messageFilter.value) params.append('message', messageFilter.value);
                 if (requestIdFilter.value) params.append('requestId', requestIdFilter.value);
-                if (startDate.value) params.append('startDate', startDate.value);
-                if (endDate.value) params.append('endDate', endDate.value);
+
+                // Format dates properly
+                if (startDate.value) {
+                    const startDateObj = new Date(startDate.value);
+                    params.append('startDate', startDateObj.toISOString());
+                }
+
+                if (endDate.value) {
+                    const endDateObj = new Date(endDate.value);
+                    params.append('endDate', endDateObj.toISOString());
+                }
+
+                console.log('Fetching logs with params:', params.toString());
+                // Note the leading slash in the URL
                 const response = await fetch(`/api/logs?${params.toString()}`);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+
                 const data = await response.json();
-                totalPages = data.pagination.pages;
+                console.log('Received log data:', data);
+
+                totalPages = Math.max(1, data.pagination.pages);
                 renderPagination();
-                renderLogs(data.logs);
+
+                if (data.logs && data.logs.length > 0) {
+                    renderLogs(data.logs);
+                } else {
+                    logEntries.innerHTML = '<div class="alert alert-info">No logs found matching your criteria.</div>';
+                }
             } catch (error) {
                 console.error('Error loading logs:', error);
+                logEntries.innerHTML = `<div class="alert alert-danger">Error loading logs: ${error.message}</div>`;
             }
         }
 
         // Render the log entries in the List tab
         function renderLogs(logs) {
             logEntries.innerHTML = '';
+
+            if (!logs || logs.length === 0) {
+                logEntries.innerHTML = '<div class="alert alert-info">No logs found.</div>';
+                return;
+            }
+
             logs.forEach(log => {
                 const logEntry = document.createElement('div');
                 logEntry.className = `log-entry log-${log.level}`;
                 const logTime = new Date(log.timestamp).toLocaleString();
 
-                // Handle different ways serverId might be presented
-                let serverName = 'Unknown';
-                if (log.serverId) {
-                    serverName = log.serverId;
-                } else if (log.metadata && log.metadata.serverId) {
-                    serverName = log.metadata.serverId;
-                } else if (log.metadata && log.metadata.metadata && log.metadata.metadata.serverId) {
-                    serverName = log.metadata.metadata.serverId;
-                }
+                // Use our helper function to extract server name
+                const serverName = extractServerName(log);
 
-                const reqId = log.requestId || '';
+                // Extract request ID consistently
+                const reqId = log.requestId || (log.metadata && log.metadata.requestId) || '';
 
                 logEntry.innerHTML = `
-                    <div class="row">
-                        <div class="col-md-2"><span class="timestamp">${logTime}</span></div>
-                        <div class="col-md-1">${log.level.toUpperCase()}</div>
-                        <div class="col-md-2">${serverName}</div>
-                        <div class="col-md-7">
-                        ${sanitizeHTML(log.message)}
-                        ${reqId ? `<small class="text-muted ms-2">(${sanitizeHTML(reqId)})</small>` : ''}
-                        <button class="btn btn-chevron view-details"
-                        data-log='${JSON.stringify(log)}'>&rsaquo;</button>
-                    </div>
+            <div class="row">
+                <div class="col-md-2"><span class="timestamp">${logTime}</span></div>
+                <div class="col-md-1">${log.level.toUpperCase()}</div>
+                <div class="col-md-2">${sanitizeHTML(serverName)}</div>
+                <div class="col-md-7">
+                    ${sanitizeHTML(log.message)}
+                    ${reqId ? `<small class="text-muted ms-2">(${sanitizeHTML(reqId)})</small>` : ''}
+                    <button class="btn btn-chevron view-details">&rsaquo;</button>
+                </div>
+            </div>
+            <div class="log-details">
+                <pre>${sanitizeHTML(JSON.stringify(log, null, 2))}</pre>
+            </div>
+        `;
 
-                    </div>
-                    <div class="log-details">
-                        <pre>${sanitizeHTML(JSON.stringify(log, null, 2))}</pre>
-                    </div>
-                `;
+                // Show log details when the chevron is clicked
+                const detailsButton = logEntry.querySelector('.view-details');
+                const detailsPanel = logEntry.querySelector('.log-details');
+
+                detailsButton.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent the whole log entry from being clicked
+
+                    if (detailsPanel.style.display === 'block') {
+                        detailsPanel.style.display = 'none';
+                        detailsButton.innerHTML = '&rsaquo;';
+                    } else {
+                        detailsPanel.style.display = 'block';
+                        detailsButton.innerHTML = '&lsaquo;';
+                    }
+                });
+
                 logEntry.addEventListener('click', () => {
                     updateDetailsTab(log);
                 });
+
                 logEntries.appendChild(logEntry);
             });
         }
@@ -529,18 +609,45 @@
         // Fetch and display log statistics in the Stats tab
         async function loadStats() {
             try {
+                // Note the leading slash in the URL
                 const response = await fetch('/api/stats');
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+
                 const stats = await response.json();
+                console.log('Received stats data:', stats);
+
                 const logStats = document.getElementById('logStats');
                 logStats.innerHTML = `
-                    <p>Total Logs: ${stats.totalLogs}</p>
-                    <p>Error Logs: ${stats.errorCount}</p>
-                    <p>Warning Logs: ${stats.warnCount}</p>
-                    <p>Info Logs: ${stats.infoCount}</p>
-                    <p>Unique Servers: ${stats.serverCount}</p>
-                `;
+            <p>Total Logs: ${stats.totalLogs || 0}</p>
+            <p>Error Logs: ${stats.errorCount || 0}</p>
+            <p>Warning Logs: ${stats.warnCount || 0}</p>
+            <p>Info Logs: ${stats.infoCount || 0}</p>
+            <p>Unique Servers: ${stats.serverCount || 0}</p>
+        `;
             } catch (error) {
                 console.error('Error loading stats:', error);
+                const logStats = document.getElementById('logStats');
+                logStats.innerHTML = `<div class="alert alert-danger">Error loading statistics: ${error.message}</div>`;
+            }
+        }
+
+        function extractServerName(log) {
+            // Check all possible locations for server identification
+            if (log.serverId) {
+                return log.serverId;
+            } else if (log.metadata && log.metadata.serverId) {
+                return log.metadata.serverId;
+            } else if (log.metadata && log.metadata.metadata && log.metadata.metadata.serverId) {
+                return log.metadata.metadata.serverId;
+            } else if (log.hostname) {
+                return log.hostname;
+            } else if (log.metadata && log.metadata.hostname) {
+                return log.metadata.hostname;
+            } else {
+                return 'Unknown';
             }
         }
 
