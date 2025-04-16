@@ -1,5 +1,6 @@
 plugins {
     kotlin("jvm") version "2.1.10"
+    application
 }
 
 group = "com.dallaslabs"
@@ -45,9 +46,14 @@ dependencies {
     implementation("io.vertx:vertx-mongo-client:4.4.4")
 }
 
+application {
+    mainClass.set("com.dallaslabs.MainKt")  // Replace with your actual main class path
+}
+
 tasks.test {
     useJUnitPlatform()
 }
+
 kotlin {
     jvmToolchain(17)
 }
