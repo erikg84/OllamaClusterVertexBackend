@@ -69,17 +69,6 @@ class MainVerticle : CoroutineVerticle() {
         val clusterHandler = ClusterHandler(vertx, clusterService, logService)
         val adminHandler = AdminHandler(vertx, adminService, loadBalancerService, performanceTrackerService, logService)
 
-        val visionHandler = VisionHandler(
-            vertx,
-            queue,
-            modelRegistryService,
-            nodeService,
-            nodes,
-            performanceTrackerService,
-            loadBalancerService,
-            logService
-        )
-
         val visionModelHandler = VisionModelHandler(
             vertx,
             modelRegistryService,
@@ -94,6 +83,7 @@ class MainVerticle : CoroutineVerticle() {
             nodes,
             logService
         )
+
         val performanceOptimizationHandler = PerformanceOptimizationHandler(
             vertx,
             performanceOptimizationService,
@@ -119,7 +109,9 @@ class MainVerticle : CoroutineVerticle() {
             performanceTrackerService,
             logService
         )
+
         val agentHandler = AgentHandler(vertx, agentService, logService)
+
         val orchestrationPatternService = OrchestrationPatternService(
             vertx,
             modelRegistryService,
@@ -131,10 +123,22 @@ class MainVerticle : CoroutineVerticle() {
             performanceTrackerService,
             logService
         )
+
         val orchestrationPatternHandler = OrchestrationPatternHandler(
             vertx,
             orchestrationPatternService,
             logService
+        )
+
+        val visionHandler = VisionHandler(
+            vertx,
+            queue,
+            modelRegistryService,
+            nodes,
+            performanceTrackerService,
+            loadBalancerService,
+            logService,
+            performanceOptimizationService
         )
 
         val router = Router.router(vertx)
