@@ -141,6 +141,17 @@ class MainVerticle : CoroutineVerticle() {
             performanceOptimizationService
         )
 
+        val documentHandler = DocumentHandler(
+            vertx,
+            queue,
+            modelRegistryService,
+            nodes,
+            performanceTrackerService,
+            loadBalancerService,
+            logService,
+            performanceOptimizationService
+        )
+
         val router = Router.router(vertx)
 
         router.route().handler(BodyHandler.create())
@@ -218,6 +229,8 @@ class MainVerticle : CoroutineVerticle() {
         router.get("/api/vision-models").handler { visionModelHandler.getVisionModels(it) }
         router.post("/api/vision").handler { visionHandler.handle(it) }
         router.post("/api/vision/stream").handler { visionHandler.handleStream(it) }
+
+        router.post("/api/document").handler { documentHandler.handle(it) }
 
         router.get("/api/flow/stats").handler { ctx ->
             val stats = FlowTracker.getStatistics()

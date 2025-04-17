@@ -44,10 +44,22 @@ dependencies {
     implementation("io.vertx:vertx-web-api-contract:4.5.1")
     testImplementation(kotlin("test"))
     implementation("io.vertx:vertx-mongo-client:4.4.4")
+
+    // For PDF processing
+    implementation("org.apache.pdfbox:pdfbox:2.0.27")
+
+    // For Office documents
+    implementation("org.apache.poi:poi:5.2.3")
+    implementation("org.apache.pdfbox:pdfbox:2.0.29")
+    implementation("org.apache.poi:poi-ooxml:5.4.0")
+
+    // For universal document processing
+    implementation("org.apache.tika:tika-core:2.7.0")
+    implementation("org.apache.tika:tika-parsers-standard-package:2.7.0")
 }
 
 application {
-    mainClass.set("com.dallaslabs.MainKt")  // Replace with your actual main class path
+    mainClass.set("com.dallaslabs.MainKt")
 }
 
 tasks.test {
