@@ -62,47 +62,46 @@ data class Model(
     val details: ModelDetails? = null
 )
 
-data class VisionRequest(
-    val model: String = "llava:13b",
-    val prompt: String = "Describe this image in detail",
-    val node: String? = null,
-    val stream: Boolean = false,
-    val options: JsonObject? = null
-)
-
-data class VisionResponse(
-    val message: Message? = null,
-    val model: String? = null,
-    val createdAt: String? = null,
-    val usage: JsonObject? = null
-) {
-    data class Message(
-        val role: String? = null,
-        val content: String? = null
-    )
+/**
+ * Enum defining different processing strategies for document handling
+ */
+enum class ProcessingStrategy {
+    DIRECT,             // Process each document directly in the orchestration service
+    NODE_BACKEND,       // Send documents to Node.js backend for processing
+    DISTRIBUTED,        // Distribute documents across multiple nodes
+    COMBINED_CHUNKING   // Process documents by combining and chunking
 }
 
 /**
- * Extension function to convert ModelInfo to frontend Model format
+ * Information about a document being processed
  */
-fun ModelInfo.toFrontendModel(nodeList: List<String>): Model {
-    val parameterSize = when {
-        size > 1_000_000_000 -> "${size / 1_000_000_000}B"
-        size > 1_000_000 -> "${size / 1_000_000}M"
-        else -> "${size} bytes"
-    }
+data class DocumentInfo(
+    val id: String,              // Unique identifier for this document
+    val filename: String,        // Original filename
+    val contentType: String,     // MIME type of the document
+    val text: String,            // Extracted text content
+    val size: Long,              // Size in bytes
+    val uploadPath: String,      // Path to the uploaded file
+    val metadata: JsonObject = JsonObject()  // Additional metadata
+)
 
-    return Model(
-        id = id,
-        name = name,
-        node = nodeList.firstOrNull(),
-        status = if (nodeList.isNotEmpty()) ModelStatus.AVAILABLE else ModelStatus.UNAVAILABLE,
-        details = ModelDetails(
-            family = type,
-            parameterSize = parameterSize,
-            quantizationLevel = quantization,
-            format = "gguf",  // Default format for Ollama models
-            modified = null   // We don't have this information in the current ModelInfo
-        )
-    )
-}
+/**
+ * Result of processing a single document
+ */
+data class DocumentResult(
+    val documentId: String,         // ID of the document this result is for
+    val filename: String,           // Original filename
+    val content: String,            // Processed content/output
+    val processingTimeMs: Long,     // Processing time in milliseconds
+    val metadata: JsonObject = JsonObject(),  // Additional metadata about processing
+    val originalText: String? = null // Optional original text (for reference)
+)
+
+/**
+ * Result of synthesizing multiple document results
+ */
+data class SynthesisResult(
+    val content: String,            // Synthesized content
+    val processingTimeMs: Long,     // Processing time in milliseconds
+    val metadata: JsonObject = JsonObject()  // Additional metadata
+)

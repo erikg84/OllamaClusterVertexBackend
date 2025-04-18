@@ -146,15 +146,15 @@ class MainVerticle : CoroutineVerticle() {
             queue,
             modelRegistryService,
             nodes,
-            performanceTrackerService,
             loadBalancerService,
             logService,
-            performanceOptimizationService
+            performanceOptimizationService,
+            taskDecompositionService
         )
 
         val router = Router.router(vertx)
 
-        router.route().handler(BodyHandler.create())
+        router.route().handler(BodyHandler.create().setUploadsDirectory("uploads").setDeleteUploadedFilesOnEnd(false))
         router.route().handler(RequestIdHandler.create())
         router.route().handler(LoggingHandler.create(vertx, logService))
 
@@ -231,6 +231,9 @@ class MainVerticle : CoroutineVerticle() {
         router.post("/api/vision/stream").handler { visionHandler.handleStream(it) }
 
         router.post("/api/document").handler { documentHandler.handle(it) }
+        router.post("/api/document/batch").handler { ctx ->
+            documentHandler.handle(ctx)
+        }
 
         router.get("/api/flow/stats").handler { ctx ->
             val stats = FlowTracker.getStatistics()

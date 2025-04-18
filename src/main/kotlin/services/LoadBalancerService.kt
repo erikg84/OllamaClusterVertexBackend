@@ -153,6 +153,80 @@ class LoadBalancerService(
         return metrics
     }
 
+    /**
+     * Selects the least busy node from a list of node names
+     * @param nodeNames List of node names to choose from
+     * @return The name of the least busy node, or null if no suitable nodes found
+     */
+    suspend fun selectLeastBusyNode(nodeNames: List<String>): String? {
+        if (nodeNames.isEmpty()) {
+            logger.warn { "No nodes provided to selectLeastBusyNode" }
+            return null
+        }
+
+        // Get current node loads
+        val nodeLoads = nodeService.getNodeLoads()
+
+        // Calculate a score for each node based on:
+        // 1. Current load (CPU, memory)
+        // 2. Number of recent requests
+        // 3. Recent failures
+        // 4. Current concurrent requests
+
+        val nodeScores = mutableMapOf<String, Double>()
+
+        for (nodeName in nodeNames) {
+            val node = nodeService.getNodes().find { it.name == nodeName }
+            if (node == null) {
+                logger.warn { "Node not found: $nodeName" }
+                continue
+            }
+
+            // Get base load score
+            val load = nodeLoads[nodeName] ?: Double.MAX_VALUE
+            val loadScore = if (load == Double.MAX_VALUE) 0.0 else 1.0 / (1.0 + load)
+
+            // Get request count score
+            val requestCount = requestCounts[nodeName]?.get() ?: 0
+            val requestScore = 1.0 / (1.0 + requestCount / 100.0)
+
+            // Get failure score
+            val failures = failureCounts[nodeName]?.get() ?: 0
+            val failureScore = 1.0 / (1.0 + failures)
+
+            // Get concurrent requests score
+            val concurrentRequests = performanceTracker.getCurrentConcurrentRequests(nodeName)
+            val concurrentScore = 1.0 / (1.0 + concurrentRequests)
+
+            // Calculate total score (higher is better)
+            val totalScore = (LOAD_WEIGHT * loadScore) +
+                    (RESPONSE_TIME_WEIGHT * requestScore) +
+                    (FAILURE_WEIGHT * failureScore) +
+                    (0.2 * concurrentScore)
+
+            nodeScores[nodeName] = totalScore
+
+            logger.debug {
+                "Node $nodeName busyness score: $totalScore (load=$loadScore, requests=$requestScore, " +
+                        "failures=$failureScore, concurrent=$concurrentScore)"
+            }
+        }
+
+        // Select the node with the highest score (least busy)
+        val bestNode = nodeScores.maxByOrNull { it.value }?.key
+
+        if (bestNode != null) {
+            logService.log("info", "Selected least busy node", mapOf(
+                "nodeName" to bestNode,
+                "score" to (nodeScores[bestNode] ?: 0.0)
+            ))
+        } else {
+            logger.warn { "No suitable nodes found" }
+        }
+
+        return bestNode
+    }
+
     data class LoadBalancerNodeMetrics(
         val requestCount: Int,
         val averageResponseTimeMs: Double,
