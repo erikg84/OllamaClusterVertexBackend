@@ -45,7 +45,7 @@ class MainVerticle : CoroutineVerticle() {
         }
 
         val mongoConfig = JsonObject()
-            .put("connection_string", "mongodb://192.168.68.145:27017/logs")
+            .put("connection_string", "mongodb://192.168.68.143:27017/logs")
             .put("db_name", "logs")
 
         val mongoClient = MongoClient.createShared(vertx, mongoConfig)

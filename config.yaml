@@ -6,24 +6,24 @@ server:
   concurrency: 20
 
 mongodb:
-  uri: "mongodb://192.168.68.145:27017/logs"
+  uri: "mongodb://192.168.68.143:27017/logs"
   database: "logs"
 
 nodes:
   - name: "MAC_STUDIO"
-    host: "192.168.68.108"
+    host: "192.168.68.144"
     port: 3000
     type: "gpu"
     platform: "macos"
     capabilities: ["tensor", "metal"]
   - name: "MAC_MINI"
-    host: "192.168.68.110"
+    host: "192.168.68.103"
     port: 3000
     type: "gpu"
     platform: "macos"
     capabilities: ["tensor", "metal"]
   - name: "MAC_BOOK_PRO"
-    host: "192.168.68.165"
+    host: "192.168.68.105"
     port: 3000
     type: "gpu"
     platform: "macos"
@@ -35,7 +35,7 @@ nodes:
     platform: "windows"
     capabilities: ["avx512", "parallel"]
   - name: "BlackHP"
-    host: "192.168.68.145"
+    host: "192.168.68.143"
     port: 3000
     type: "cpu"
     platform: "windows"
