@@ -11,7 +11,7 @@ mongodb:
 
 nodes:
   - name: "MAC_STUDIO"
-    host: "192.168.68.144"
+    host: "192.168.68.157"
     port: 3000
     type: "gpu"
     platform: "macos"
